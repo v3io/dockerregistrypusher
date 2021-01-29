@@ -1,0 +1,10 @@
+# please keep this to a minimum - defaults are good
+[tool.black]
+target-version = ['py36', 'py37', 'py38']
+exclude = '''
+/(
+    .git
+  | .venv
+  | venv
+)/
+'''
