@@ -28,6 +28,7 @@ def run(args):
     # start root logger with kwargs and create manof
     reg_client = core.Registry(
         logger=logger,
+        parallel=args.parallel,
         archive_path=args.archive_path,
         registry_url=args.registry_url,
         stream=args.stream,
@@ -45,15 +46,25 @@ def run(args):
 
 
 def register_arguments(parser):
-    # global options for manof
+
+    # logger options
     clients.logging.Client.register_arguments(parser)
 
     # verbosity shorthands
     parser.add_argument(
         '-v',
+        '-verbose',
         help='Set log level to debug (same as --log-severity=debug)',
         action='store_true',
         default=False,
+    )
+
+    parser.add_argument(
+        '-p',
+        '--parallel',
+        help='Control parallelism (multi-processing)',
+        type=int,
+        default=1,
     )
 
     parser.add_argument(
@@ -70,14 +81,12 @@ def register_arguments(parser):
         help='The url of the target registry to push to',
     )
     parser.add_argument(
-        '-l',
         '--login',
         help='Basic-auth login name for registry',
         required=False,
     )
 
     parser.add_argument(
-        '-p',
         '--password',
         help='Basic-auth login password for registry',
         required=False,
@@ -113,16 +122,12 @@ def register_arguments(parser):
 
 
 if __name__ == '__main__':
-    # create an argument parser
     arg_parser = argparse.ArgumentParser()
 
-    # register all arguments and sub-commands
     register_arguments(arg_parser)
 
     parsed_args = arg_parser.parse_args()
 
-    # parse the known args, seeing how the targets may add arguments of their own and re-parse
     ret_val = run(parsed_args)
 
-    # return value
     sys.exit(ret_val)
