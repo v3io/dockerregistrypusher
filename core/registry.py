@@ -74,7 +74,7 @@ class Registry(object):
 
         for image_config in archive_manifest:
             self._process_pool.apply_async(self._process_image, image_config)
-            self._process_image(image_config)
+
         self._process_pool.close()
         self._process_pool.join()
         elapsed = (time.time() - start_time)
@@ -184,16 +184,21 @@ class Registry(object):
             "Content-Type": "application/vnd.docker.distribution.manifest.v2+json"
         }
         url = self._registry_url + "/v2/" + image + "/manifests/" + tag
-        r = requests.put(
+        response = requests.put(
             url,
             headers=headers,
             data=manifest,
             auth=self._basicauth,
             verify=self._ssl_verify,
         )
-        if r.status_code != 201:
+        if response.status_code != 201:
             self._logger.log_and_raise(
-                'error', 'Failed to push manifest', image=image, tag=tag
+                'error',
+                'Failed to push manifest',
+                image=image,
+                tag=tag,
+                status_code=response.status_code,
+                content=response.content,
             )
 
     def _initialize_push(self, repository):
