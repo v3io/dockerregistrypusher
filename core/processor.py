@@ -87,7 +87,6 @@ def process_archive(logger, _extractor, _registry, parallel):
 
     logger.info(
         'Finished processing archive',
-        results=[res.get() for res in results],
         archive_path=_extractor.archive_path,
         elapsed=humanfriendly.format_timespan(elapsed),
     )
