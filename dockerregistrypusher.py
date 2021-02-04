@@ -25,12 +25,12 @@ def run(args):
         log_colors=args.log_colors,
     ).logger
 
-    # start root logger with kwargs and create manof
-    reg_client = core.Registry(
+    # initialize and start processing
+    processor = core.Processor(
         logger=logger,
         parallel=args.parallel,
-        archive_path=args.archive_path,
         registry_url=args.registry_url,
+        archive_path=args.archive_path,
         stream=args.stream,
         login=args.login,
         password=args.password,
@@ -38,7 +38,8 @@ def run(args):
         replace_tags_match=args.replace_tags_match,
         replace_tags_target=args.replace_tags_target,
     )
-    reg_client.process_archive()
+    processor.process()
+
     if logger.first_error is None:
         retval = 0
 

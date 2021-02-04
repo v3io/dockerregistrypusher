@@ -2,11 +2,8 @@ import os
 import os.path
 import re
 import json
-import tarfile
-import tempfile
 import hashlib
 import urllib.parse
-import multiprocessing.pool
 import time
 
 import humanfriendly
@@ -20,9 +17,7 @@ class Registry(object):
     def __init__(
         self,
         logger,
-        parallel,
         registry_url,
-        archive_path,
         stream=False,
         login=None,
         password=None,
@@ -36,7 +31,6 @@ class Registry(object):
         if urllib.parse.urlparse(registry_url).scheme not in ['http', 'https']:
             registry_url = 'http://' + registry_url
         self._registry_url = registry_url
-        self._archive_path = os.path.abspath(archive_path)
         self._login = login
         self._password = password
         self._basicauth = None
@@ -47,14 +41,9 @@ class Registry(object):
         if self._login:
             self._basicauth = requests.auth.HTTPBasicAuth(self._login, self._password)
 
-        # prepare proc pool, note tarfile is not threadsafe https://bugs.python.org/issue23649
-        self._process_pool = multiprocessing.pool.Pool(processes=parallel)
-
         self._logger.debug(
             'Initialized',
             registry_url=self._registry_url,
-            parallel=parallel,
-            archive_path=self._archive_path,
             login=self._login,
             password=self._password,
             ssl_verify=self._ssl_verify,
@@ -63,110 +52,74 @@ class Registry(object):
             replace_tags_target=self._replace_tags_target,
         )
 
-    def process_archive(self):
+    def process_image(self, tmp_dir_name, image_config):
         """
-        Processing given archive and pushes the images it contains to the registry
-        """
-        start_time = time.time()
-        self._logger.info('Processing archive', archive_path=self._archive_path)
-        archive_manifest = self._get_manifest_from_tar()
-        self._logger.debug('Extracted archive manifest', manifest_file=archive_manifest)
-
-        for image_config in archive_manifest:
-            self._process_pool.apply_async(self._process_image, image_config)
-
-        self._process_pool.close()
-        self._process_pool.join()
-        elapsed = (time.time() - start_time)
-        self._logger.info('Finished processing archive',
-                          archive_path=self._archive_path,
-                          elapsed=humanfriendly.format_timespan(elapsed))
-
-    def _process_image(self, image_config):
-        """
-        Processing a single image entry from the archive - extracting and pushing to registry
+        Processing a single image entry from extracted files - pushing to registry
         """
         repo_tags = image_config["RepoTags"]
-        config_loc = image_config["Config"]
+        config_filename = image_config["Config"]
+        config_path = os.path.join(tmp_dir_name, config_filename)
 
         self._logger.info('Processing image', repo_tags=repo_tags)
         image_start_time = time.time()
-        config_parsed = self._get_config_from_tar(config_loc)
-        self._logger.verbose('Parsed image config', config_parsed=config_parsed)
+        config_parsed = self._load_json_file(config_path)
+        self._logger.info('Parsed image config', config_parsed=config_parsed)
 
-        with tempfile.TemporaryDirectory() as tmp_dir_name:
-            for repo in repo_tags:
-                repo_tag_start_time = time.time()
-                image, tag = self._parse_image_tag(repo)
-                self._logger.info(
-                    'Extracting tar for image repo and tag',
-                    image=image,
-                    tag=tag,
-                    tmp_dir_name=tmp_dir_name,
-                )
-                self._extract_tar_file(tmp_dir_name)
+        for repo in repo_tags:
+            repo_tag_start_time = time.time()
+            image, tag = self._parse_image_tag(repo)
+            self._logger.info(
+                'Pushing image repo and tag',
+                image=image,
+                tag=tag,
+                tmp_dir_name=tmp_dir_name,
+            )
 
-                # push individual image layers
-                layers = image_config["Layers"]
-                for layer in layers:
-                    self._logger.info('Pushing layer', layer=layer)
-                    push_url = self._initialize_push(image)
-                    layer_path = os.path.join(tmp_dir_name, layer)
-                    self._push_layer(layer_path, push_url)
-
-                # then, push image config
-                self._logger.info(
-                    'Pushing image config', image=image, config_loc=config_loc
-                )
+            # push individual image layers
+            layers = image_config["Layers"]
+            for layer in layers:
+                self._logger.info('Pushing layer', layer=layer)
                 push_url = self._initialize_push(image)
-                config_path = os.path.join(tmp_dir_name, config_loc)
-                self._push_config(config_path, push_url)
+                layer_path = os.path.join(tmp_dir_name, layer)
+                self._push_layer(layer_path, push_url)
 
-                # keep the pushed layers
-                properly_formatted_layers = [os.path.join(tmp_dir_name, layer) for layer in layers]
+            # then, push image config
+            self._logger.info(
+                'Pushing image config', image=image, config_loc=config_filename
+            )
+            push_url = self._initialize_push(image)
+            self._push_config(config_path, push_url)
 
-                # Now we need to create and push a manifest for the image
-                creator = manifest_creator.ImageManifestCreator(
-                    config_path, properly_formatted_layers
-                )
-                image_manifest = creator.create()
+            # keep the pushed layers
+            properly_formatted_layers = [
+                os.path.join(tmp_dir_name, layer) for layer in layers
+            ]
 
-                # Override tags if needed: from --replace-tags-match and --replace-tags-target
-                tag = self._replace_tag(image, tag)
+            # Now we need to create and push a manifest for the image
+            creator = manifest_creator.ImageManifestCreator(
+                config_path, properly_formatted_layers
+            )
+            image_manifest = creator.create()
 
-                self._logger.info('Pushing image tag manifest', image=image, tag=tag)
-                self._push_manifest(image_manifest, image, tag)
-                repo_tag_elapsed = (time.time() - repo_tag_start_time)
-                self._logger.info('Image tag Pushed',
-                                  image=image,
-                                  tag=tag,
-                                  elapsed=humanfriendly.format_timespan(repo_tag_elapsed))
+            # Override tags if needed: from --replace-tags-match and --replace-tags-target
+            tag = self._replace_tag(image, tag)
 
-        image_elapsed = (time.time() - image_start_time)
-        self._logger.info('Image pushed', repo_tags=repo_tags, elapsed=humanfriendly.format_timespan(image_elapsed))
+            self._logger.info('Pushing image tag manifest', image=image, tag=tag)
+            self._push_manifest(image_manifest, image, tag)
+            repo_tag_elapsed = time.time() - repo_tag_start_time
+            self._logger.info(
+                'Image tag Pushed',
+                image=image,
+                tag=tag,
+                elapsed=humanfriendly.format_timespan(repo_tag_elapsed),
+            )
 
-    def _get_manifest_from_tar(self):
-        return self._extract_json_from_tar(self._archive_path, "manifest.json")
-
-    def _get_config_from_tar(self, name):
-        return self._extract_json_from_tar(self._archive_path, name)
-
-    def _extract_json_from_tar(self, tar_filepath, file_to_parse):
-        loaded = self._extract_file_from_tar(tar_filepath, file_to_parse)
-        stringified = self._parse_as_utf8(loaded)
-        return json.loads(stringified)
-
-    @staticmethod
-    def _extract_file_from_tar(tar_filepath, file_to_extract):
-        manifest = tarfile.open(tar_filepath)
-        file_contents = manifest.extractfile(file_to_extract)
-        return file_contents
-
-    @staticmethod
-    def _parse_as_utf8(to_parse):
-        as_str = (to_parse.read()).decode("utf-8")
-        to_parse.close()
-        return as_str
+        image_elapsed = time.time() - image_start_time
+        self._logger.info(
+            'Image pushed',
+            repo_tags=repo_tags,
+            elapsed=humanfriendly.format_timespan(image_elapsed),
+        )
 
     def _conditional_print(self, what, end=None):
         if self._stream:
@@ -174,10 +127,6 @@ class Registry(object):
                 print(what, end=end)
             else:
                 print(what)
-
-    def _extract_tar_file(self, tmp_dir_name):
-        with tarfile.open(self._archive_path) as fh:
-            fh.extractall(tmp_dir_name)
 
     def _push_manifest(self, manifest, image, tag):
         headers = {
@@ -325,3 +274,8 @@ class Registry(object):
                 )
 
         return orig_tag
+
+    @staticmethod
+    def _load_json_file(filepath):
+        with open(filepath, 'r') as fh:
+            return json.loads(fh.read())
