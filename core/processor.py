@@ -75,12 +75,12 @@ class Processor(object):
 
                 pool.close()
                 pool.join()
-        elapsed = time.time() - start_time
 
         # this will throw if any pool worker caught an exception
         for res in results:
             res.get()
 
+        elapsed = time.time() - start_time
         self._logger.info(
             'Finished processing archive',
             archive_path=self._extractor.archive_path,
