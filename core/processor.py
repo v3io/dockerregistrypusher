@@ -48,58 +48,57 @@ class Processor(object):
         self._parallel = parallel
 
     def process(self):
-        process_archive(self._logger, self._extractor, self._registry, self._parallel)
+        """
+        Processing given archive and pushes the images it contains to the registry
+        """
+        start_time = time.time()
+        self._logger.info(
+            'Processing archive', archive_path=self._extractor.archive_path
+        )
+        results = []
+        with tempfile.TemporaryDirectory() as tmp_dir_name:
+
+            # extract the whole thing
+            self._extractor.extract_all(tmp_dir_name)
+
+            manifest = self._get_manifest(tmp_dir_name)
+            self._logger.debug('Extracted archive manifest', manifest=manifest)
+
+            # prepare proc pool, note tarfile is not thread safe https://bugs.python.org/issue23649
+            with multiprocessing.pool.Pool(processes=self._parallel) as pool:
+                for image_config in manifest:
+                    res = pool.apply_async(
+                        process_image,
+                        (self._logger, self._registry, tmp_dir_name, image_config),
+                    )
+                    results.append(res)
+
+                pool.close()
+                pool.join()
+        elapsed = time.time() - start_time
+
+        # this will throw if any pool worker caught an exception
+        for res in results:
+            res.get()
+
+        self._logger.info(
+            'Finished processing archive',
+            archive_path=self._extractor.archive_path,
+            elapsed=humanfriendly.format_timespan(elapsed),
+        )
+
+    @staticmethod
+    def _get_manifest(tmp_dir_name):
+        with open(os.path.join(tmp_dir_name, 'manifest.json'), 'r') as fh:
+            manifest = json.loads(fh.read())
+            return manifest
 
 
 #
-# Global wrappers to use multiprocessing.pool.Pool which can't pickle instance methods
+# Global wrappers to use with multiprocessing.pool.Pool which can't pickle instance methods
 #
-def process_archive(logger, _extractor, _registry, parallel):
-    """
-    Processing given archive and pushes the images it contains to the registry
-    """
-    start_time = time.time()
-    logger.info('Processing archive', archive_path=_extractor.archive_path)
-    results = []
-    with tempfile.TemporaryDirectory() as tmp_dir_name:
-
-        # extract the whole thing
-        _extractor.extract_all(tmp_dir_name)
-
-        manifest = get_manifest(tmp_dir_name)
-        logger.debug('Extracted archive manifest', manifest=manifest)
-
-        # prepare proc pool, note tarfile is not thread safe https://bugs.python.org/issue23649
-        with multiprocessing.pool.Pool(processes=parallel) as pool:
-            for image_config in manifest:
-                res = pool.apply_async(
-                    process_image, (logger, _registry, tmp_dir_name, image_config)
-                )
-                results.append(res)
-
-            pool.close()
-            pool.join()
-    elapsed = time.time() - start_time
-
-    # this will throw if any pool worker caught an exception
-    for res in results:
-        res.get()
-
-    logger.info(
-        'Finished processing archive',
-        archive_path=_extractor.archive_path,
-        elapsed=humanfriendly.format_timespan(elapsed),
-    )
-
-
 def process_image(logger, _registry, tmp_dir_name, image_config):
     try:
         _registry.process_image(tmp_dir_name, image_config)
     except Exception as exc:
         logger.log_and_raise('error', 'Failed processing image', exc=exc)
-
-
-def get_manifest(tmp_dir_name):
-    with open(os.path.join(tmp_dir_name, 'manifest.json'), 'r') as fh:
-        manifest = json.loads(fh.read())
-        return manifest
