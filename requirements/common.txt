@@ -4,3 +4,4 @@ simplejson==3.8.2
 colorama==0.4.4
 pygments==2.2.0
 incremental==17.5.0
+humanfriendly==4.8
