@@ -158,7 +158,6 @@ class Registry(object):
         # pushing the layer in parallel from different images might result in 500 internal server error
         self._logger.debug('Acquiring layer lock', layer_key=layer_key)
         self._layer_locks.setdefault(layer_key, threading.Lock())
-        self._logger.debug('Layer lock acquired', layer_key=layer_key)
         self._layer_locks[layer_key].acquire()
         try:
             self._logger.info('Pushing layer', layer=layer)
