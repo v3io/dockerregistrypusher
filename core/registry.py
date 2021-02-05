@@ -166,7 +166,7 @@ class Registry(object):
             self._push_layer(layer_path, push_url)
         finally:
             self._logger.debug('Releasing layer lock', layer_key=layer_key)
-            self._logger[layer_key].release()
+            self._layer_locks[layer_key].release()
 
     def _initialize_push(self, repository):
         """
