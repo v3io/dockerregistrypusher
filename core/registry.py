@@ -5,6 +5,7 @@ import json
 import hashlib
 import urllib.parse
 import time
+import threading
 
 import humanfriendly
 import requests
@@ -40,6 +41,8 @@ class Registry(object):
         self._replace_tags_target = replace_tags_target
         if self._login:
             self._basicauth = requests.auth.HTTPBasicAuth(self._login, self._password)
+
+        self._layer_locks = {}
 
         self._logger.debug(
             'Initialized',
@@ -78,10 +81,7 @@ class Registry(object):
             # push individual image layers
             layers = image_config["Layers"]
             for layer in layers:
-                self._logger.info('Pushing layer', layer=layer)
-                push_url = self._initialize_push(image)
-                layer_path = os.path.join(tmp_dir_name, layer)
-                self._push_layer(layer_path, push_url)
+                self._process_layer(layer, image, tmp_dir_name)
 
             # then, push image config
             self._logger.info(
@@ -149,6 +149,24 @@ class Registry(object):
                 status_code=response.status_code,
                 content=response.content,
             )
+
+    def _process_layer(self, layer, image, tmp_dir_name):
+
+        # isolate layer key
+        layer_key = os.path.basename(layer)
+
+        # pushing the layer in parallel from different images might result in 500 internal server error
+        self._logger.debug('Acquiring layer lock', layer_key=layer_key)
+        self._layer_locks.setdefault(layer_key, threading.Lock())
+        self._layer_locks[layer_key].acquire()
+        try:
+            self._logger.info('Pushing layer', layer=layer)
+            push_url = self._initialize_push(image)
+            layer_path = os.path.join(tmp_dir_name, layer)
+            self._push_layer(layer_path, push_url)
+        finally:
+            self._logger.debug('Releasing layer lock', layer_key=layer_key)
+            self._logger[layer_key].release()
 
     def _initialize_push(self, repository):
         """

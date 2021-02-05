@@ -64,8 +64,9 @@ class Processor(object):
             manifest = self._get_manifest(tmp_dir_name)
             self._logger.debug('Extracted archive manifest', manifest=manifest)
 
-            # prepare proc pool, note tarfile is not thread safe https://bugs.python.org/issue23649
-            with multiprocessing.pool.Pool(processes=self._parallel) as pool:
+            # prepare thread pool, note tarfile is not thread safe https://bugs.python.org/issue23649
+            # so if full extraction is not done beforehand, this is not safe
+            with multiprocessing.pool.ThreadPool(processes=self._parallel) as pool:
                 for image_config in manifest:
                     res = pool.apply_async(
                         process_image,
