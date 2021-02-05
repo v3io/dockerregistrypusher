@@ -115,7 +115,7 @@ class _VariableLogging(logging.Logger):
 
         # format the exception into the raised error message if we got one
         if 'exc' in kwargs:
-            error_msg = '{0}: {1}'.format(error_msg, kwargs['exc'].lower())
+            error_msg = '{0}: {1}'.format(error_msg, kwargs['exc'])
 
         exception_type = kwargs.get('exc_type', RuntimeError)
 
