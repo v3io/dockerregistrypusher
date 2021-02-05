@@ -63,7 +63,7 @@ def register_arguments(parser):
     parser.add_argument(
         '-p',
         '--parallel',
-        help='Control parallelism (multi-processing)',
+        help='Control parallelism (threads)',
         type=int,
         default=1,
     )
