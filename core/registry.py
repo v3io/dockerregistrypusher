@@ -153,7 +153,7 @@ class Registry(object):
     def _process_layer(self, layer, image, tmp_dir_name):
 
         # isolate layer key
-        layer_key = os.path.basename(layer)
+        layer_key = os.path.dirname(layer)
 
         # pushing the layer in parallel from different images might result in 500 internal server error
         self._logger.debug('Acquiring layer lock', layer_key=layer_key)
