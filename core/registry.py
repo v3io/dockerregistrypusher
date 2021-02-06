@@ -66,7 +66,9 @@ class Registry(object):
         self._logger.info('Processing image', repo_tags=repo_tags)
         image_start_time = time.time()
         config_parsed = self._load_json_file(config_path)
-        self._logger.info('Parsed image config', config_parsed=config_parsed)
+
+        # warning - spammy
+        self._logger.verbose('Parsed image config', config_parsed=config_parsed)
 
         for repo in repo_tags:
             repo_tag_start_time = time.time()
