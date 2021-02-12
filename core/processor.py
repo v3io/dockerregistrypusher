@@ -47,16 +47,22 @@ class Processor(object):
         self._extractor = extractor.Extractor(self._logger, archive_path)
         self._parallel = parallel
 
+        self._logger.debug('Initialized', parallel=self._parallel)
+
     def process(self):
         """
         Processing given archive and pushes the images it contains to the registry
         """
         start_time = time.time()
-        self._logger.info(
-            'Processing archive', archive_path=self._extractor.archive_path
-        )
         results = []
         with tempfile.TemporaryDirectory() as tmp_dir_name:
+
+            self._logger.info(
+                'Processing archive',
+                archive_path=self._extractor.archive_path,
+                parallel=self._parallel,
+                tmp_dir_name=tmp_dir_name,
+            )
 
             # extract the whole thing
             self._extractor.extract_all(tmp_dir_name)
