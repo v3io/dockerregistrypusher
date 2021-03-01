@@ -21,7 +21,7 @@ class ImageManifestCreator(object):
         manifest["layers"] = []
         for layer in self._layers_paths:
             layer_data = dict()
-            layer_data["mediaType"] = "application/vnd.docker.image.rootfs.diff.tar"
+            layer_data["mediaType"] = "application/vnd.docker.image.rootfs.diff.tar.gzip"
             layer_data["size"] = os.path.getsize(layer)
             layer_data["digest"] = self._get_digest(layer)
             manifest["layers"].append(layer_data)
