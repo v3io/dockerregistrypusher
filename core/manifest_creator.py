@@ -4,9 +4,9 @@ import json
 
 
 class ImageManifestCreator(object):
-    def __init__(self, config_path, layers_paths):
+    def __init__(self, config_path, layers_info):
         self._config_path = config_path
-        self._layers_paths = layers_paths
+        self._layers_info = layers_info
 
     def create(self):
         manifest = dict()
@@ -18,11 +18,11 @@ class ImageManifestCreator(object):
             "digest": self._get_digest(self._config_path),
         }
         manifest["layers"] = []
-        for layer in self._layers_paths:
+        for layer_info in self._layers_info:
             layer_data = {
                 "mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
-                "size": os.path.getsize(layer),
-                "digest": self._get_digest(layer),
+                "size": layer_info['size'],
+                "digest": layer_info['digest'],
             }
             manifest["layers"].append(layer_data)
 

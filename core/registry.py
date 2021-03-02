@@ -83,8 +83,17 @@ class Registry(object):
 
             # push individual image layers
             layers = image_config["Layers"]
+            manifest_layer_info = {}
             for layer in layers:
-                self._process_layer(layer, image, tmp_dir_name)
+                layer_digest, layer_size = self._process_layer(
+                    layer, image, tmp_dir_name
+                )
+                manifest_layer_info.append(
+                    {
+                        'digest': layer_digest,
+                        'size': layer_size,
+                    }
+                )
 
             # then, push image config
             self._logger.info(
@@ -93,14 +102,9 @@ class Registry(object):
             push_url = self._initialize_push(image)
             self._push_config(config_path, push_url)
 
-            # keep the pushed layers
-            properly_formatted_layers = [
-                os.path.join(tmp_dir_name, layer) for layer in layers
-            ]
-
             # Now we need to create and push a manifest for the image
             creator = manifest_creator.ImageManifestCreator(
-                config_path, properly_formatted_layers
+                config_path, manifest_layer_info
             )
             image_manifest = creator.create()
 
@@ -166,7 +170,7 @@ class Registry(object):
             self._logger.info('Pushing layer', layer=layer)
             push_url = self._initialize_push(image)
             layer_path = os.path.join(tmp_dir_name, layer)
-            self._push_layer(layer_path, push_url)
+            return self._push_layer(layer_path, push_url)
         finally:
             self._logger.debug('Releasing layer lock', layer_key=layer_key)
             self._layer_locks[layer_key].release()
@@ -196,36 +200,44 @@ class Registry(object):
         return upload_url
 
     def _push_layer(self, layer_path, upload_url):
-        self._chunked_upload(layer_path, upload_url, gzip=True)
+        return self._chunked_upload(layer_path, upload_url, gzip=True)
 
     def _push_config(self, layer_path, upload_url):
         self._chunked_upload(layer_path, upload_url)
 
     def _chunked_upload(self, filepath, upload_url, gzip=False):
         content_path = os.path.abspath(filepath)
-        content_size = os.stat(content_path).st_size
+        uncompressed_size = os.stat(filepath).st_size
+        total_pushed_size = 0
+        uncompressed_length_read = 0
+        digest = None
         with open(content_path, "rb") as f:
             index = 0
             headers = {}
             sha256hash = hashlib.sha256()
 
-            for chunk in self._read_in_chunks(f, sha256hash):
+            for chunk in self._read_in_chunks(f):
+                uncompressed_length_read += len(chunk)
                 if gzip:
                     chunk = zlib.compress(chunk)
                     headers['Content-Encoding'] = 'gzip'
 
+                sha256hash.update(chunk)
+
+                total_pushed_size += len(chunk)
                 offset = index + len(chunk)
+
                 headers['Content-Type'] = 'application/octet-stream'
                 headers['Content-Length'] = str(len(chunk))
                 headers['Content-Range'] = f'{index}-{offset}'
                 index = offset
                 last = False
-                if offset == content_size:
+                if uncompressed_length_read == uncompressed_size:
                     last = True
                 try:
                     self._conditional_print(
                         "Pushing... "
-                        + str(round((offset / content_size) * 100, 2))
+                        + str(round((offset / uncompressed_size) * 100, 2))
                         + "%  ",
                         end="\r",
                     )
@@ -262,7 +274,6 @@ class Registry(object):
                             self._logger.log_and_raise(
                                 'error',
                                 'Failed to upload chunk',
-                                digest=digest,
                                 filepath=filepath,
                                 status_code=response.status_code,
                                 content=response.content,
@@ -278,18 +289,17 @@ class Registry(object):
                         filepath=filepath,
                         exc=exc,
                     )
-            f.close()
 
         self._conditional_print("")
+        return digest, total_pushed_size
 
     @staticmethod
-    def _read_in_chunks(file_object, hashed, chunk_size=2097152):
+    def _read_in_chunks(file_object, chunk_size=2097152):
         """
-        Chunk size default 2T (monolithic upload)
+        Chunk size default 2T
         """
         while True:
             data = file_object.read(chunk_size)
-            hashed.update(data)
             if not data:
                 break
             yield data
