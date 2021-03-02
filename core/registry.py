@@ -210,21 +210,19 @@ class Registry(object):
     def _chunked_upload(self, filepath, initial_url, gzip=False):
         content_path = os.path.abspath(filepath)
 
-        # for kaniko compatibility - must be real tar.gzip and not just tar
+        # for Kaniko compatibility - must be real tar.gzip and not just tar
         if gzip and os.path.splitext(filepath)[1] == '.tar':
-            new_content_path = content_path + '.gz'
             self._logger.debug(
                 'File is not gzipped - compressing before upload',
                 content_path=content_path,
-                new_content_path=new_content_path,
             )
 
             gzip_cmd = shlex.split(f'gzip -9 {content_path}')
-            out = subprocess.check_call(gzip_cmd)
-            self._logger.debug('Finished gzipping', gzip_cmd=gzip_cmd, out=out)
-            content_path = new_content_path
+            out = subprocess.check_output(gzip_cmd, encoding='utf-8')
+            self._logger.debug('Finished gzip command', gzip_cmd=gzip_cmd, out=out)
+            content_path = content_path + '.gz'
 
-        total_size = os.stat(filepath).st_size
+        total_size = os.stat(content_path).st_size
 
         total_pushed_size = 0
         length_read = 0
