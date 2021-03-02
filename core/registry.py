@@ -207,7 +207,8 @@ class Registry:
                         layer_path=layer_path,
                     )
 
-                    gzip_cmd = shlex.split(f'gzip -9 {layer_path}')
+                    # use -f to avoid "Too many levels of symbolic links" failures
+                    gzip_cmd = shlex.split(f'gzip -9 -f {layer_path}')
                     out = subprocess.check_output(gzip_cmd, encoding='utf-8')
                     self._logger.debug(
                         'Finished gzip command', gzip_cmd=gzip_cmd, out=out
