@@ -169,9 +169,23 @@ class Registry(object):
         self._layer_locks.setdefault(layer_key, threading.Lock())
         self._layer_locks[layer_key].acquire()
         try:
+            layer_path = os.path.abspath(os.path.join(tmp_dir_name, layer))
+
+            # for Kaniko compatibility - must be real tar.gzip and not just tar
+            if os.path.splitext(layer)[1] == '.tar':
+                self._logger.debug(
+                    'File is not gzipped - compressing before upload',
+                    layer_path=layer_path,
+                )
+
+                gzip_cmd = shlex.split(f'gzip -9 {layer_path}')
+                out = subprocess.check_output(gzip_cmd, encoding='utf-8')
+                self._logger.debug('Finished gzip command', gzip_cmd=gzip_cmd, out=out)
+                layer_path += '.gz'
+
             self._logger.info('Pushing layer', layer=layer)
             push_url = self._initialize_push(image)
-            layer_path = os.path.join(tmp_dir_name, layer)
+
             return self._push_layer(layer_path, push_url)
         finally:
             self._logger.debug('Releasing layer lock', layer_key=layer_key)
@@ -202,26 +216,13 @@ class Registry(object):
         return upload_url
 
     def _push_layer(self, layer_path, upload_url):
-        return self._chunked_upload(layer_path, upload_url, gzip=True)
+        return self._chunked_upload(layer_path, upload_url)
 
-    def _push_config(self, layer_path, upload_url):
-        self._chunked_upload(layer_path, upload_url)
+    def _push_config(self, config_path, upload_url):
+        self._chunked_upload(config_path, upload_url)
 
-    def _chunked_upload(self, filepath, initial_url, gzip=False):
+    def _chunked_upload(self, filepath, initial_url):
         content_path = os.path.abspath(filepath)
-
-        # for Kaniko compatibility - must be real tar.gzip and not just tar
-        if gzip and os.path.splitext(filepath)[1] == '.tar':
-            self._logger.debug(
-                'File is not gzipped - compressing before upload',
-                content_path=content_path,
-            )
-
-            gzip_cmd = shlex.split(f'gzip -9 {content_path}')
-            out = subprocess.check_output(gzip_cmd, encoding='utf-8')
-            self._logger.debug('Finished gzip command', gzip_cmd=gzip_cmd, out=out)
-            content_path = content_path + '.gz'
-
         total_size = os.stat(content_path).st_size
 
         total_pushed_size = 0
@@ -237,7 +238,7 @@ class Registry(object):
                 length_read += len(chunk)
                 offset = index + len(chunk)
 
-                if gzip:
+                if content_path.endswith('gz') or content_path.endswith('gzip'):
                     headers['Content-Encoding'] = 'gzip'
 
                 headers['Content-Type'] = 'application/octet-stream'

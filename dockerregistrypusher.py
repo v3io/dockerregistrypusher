@@ -72,7 +72,7 @@ def register_arguments(parser):
         'archive_path',
         metavar='ARCHIVE_PATH',
         type=str,
-        help='The url of the target registry to push to',
+        help='The path of the images archive to push',
     )
 
     parser.add_argument(
