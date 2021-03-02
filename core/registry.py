@@ -16,7 +16,23 @@ import requests.auth
 from . import manifest_creator
 
 
-class Registry(object):
+class LayersLock:
+    def __init__(self):
+        self._global_lock = threading.Lock()
+        self._layers_locks = {}
+
+    def get_lock(self, key):
+
+        # global lock to check if layer was done
+        self._global_lock.acquire()
+        try:
+            self._layers_locks.setdefault(key, threading.Lock())
+            return self._layers_locks[key]
+        finally:
+            self._global_lock.release()
+
+
+class Registry:
     def __init__(
         self,
         logger,
@@ -44,7 +60,8 @@ class Registry(object):
         if self._login:
             self._basicauth = requests.auth.HTTPBasicAuth(self._login, self._password)
 
-        self._layer_locks = {}
+        self._layers_lock = LayersLock()
+        self._layers_info = {}
 
         self._logger.debug(
             'Initialized',
@@ -166,9 +183,16 @@ class Registry(object):
 
         # pushing the layer in parallel from different images might result in 500 internal server error
         self._logger.debug('Acquiring layer lock', layer_key=layer_key)
-        self._layer_locks.setdefault(layer_key, threading.Lock())
-        self._layer_locks[layer_key].acquire()
+        self._layers_lock.get_lock(layer_key).acquire()
         try:
+
+            if layer_key in self._layers_info:
+                self._logger.info(
+                    'Layer already pushed, skipping',
+                    layer_info=self._layers_info[layer_key],
+                )
+                return self._layers_info['digest'], self._layers_info['size']
+
             layer_path = os.path.abspath(os.path.join(tmp_dir_name, layer))
 
             # for Kaniko compatibility - must be real tar.gzip and not just tar
@@ -181,15 +205,21 @@ class Registry(object):
                 gzip_cmd = shlex.split(f'gzip -9 {layer_path}')
                 out = subprocess.check_output(gzip_cmd, encoding='utf-8')
                 self._logger.debug('Finished gzip command', gzip_cmd=gzip_cmd, out=out)
+                layer += '.gz'
                 layer_path += '.gz'
 
             self._logger.info('Pushing layer', layer=layer)
             push_url = self._initialize_push(image)
 
-            return self._push_layer(layer_path, push_url)
+            digest, size = self._push_layer(layer_path, push_url)
+            self._layers_info[layer_key] = {
+                'digest': digest,
+                'size': size,
+            }
+            return digest, size
         finally:
             self._logger.debug('Releasing layer lock', layer_key=layer_key)
-            self._layer_locks[layer_key].release()
+            self._layers_lock.get_lock(layer_key).release()
 
     def _initialize_push(self, repository):
         """
