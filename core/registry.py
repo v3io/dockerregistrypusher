@@ -187,11 +187,12 @@ class Registry:
         try:
 
             if layer_key in self._layers_info:
+                layer_info = self._layers_info[layer_key]
                 self._logger.info(
                     'Layer already pushed, skipping',
-                    layer_info=self._layers_info[layer_key],
+                    layer_info=layer_info,
                 )
-                return self._layers_info['digest'], self._layers_info['size']
+                return layer_info['digest'], layer_info['size']
 
             layer_path = os.path.abspath(os.path.join(tmp_dir_name, layer))
 
