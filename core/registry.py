@@ -83,7 +83,7 @@ class Registry(object):
 
             # push individual image layers
             layers = image_config["Layers"]
-            manifest_layer_info = {}
+            manifest_layer_info = []
             for layer in layers:
                 layer_digest, layer_size = self._process_layer(
                     layer, image, tmp_dir_name
