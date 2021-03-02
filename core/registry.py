@@ -6,6 +6,7 @@ import hashlib
 import urllib.parse
 import time
 import threading
+import shlex
 import subprocess
 
 import humanfriendly
@@ -212,11 +213,13 @@ class Registry(object):
         # for kaniko compatibility - must be real tar.gzip and not just tar
         if gzip:
             if os.path.splitext(filepath)[1] == '.tar':
-                self._logger.debug('Failed is not gzipped and gzipped asked - compressing before upload',
-                                   filepath=filepath,
-                                   total_size=total_size)
+                self._logger.debug(
+                    'File is not gzipped - compressing before upload',
+                    filepath=filepath,
+                    total_size=total_size,
+                )
 
-                subprocess.check_call(f'gzip -9 {content_path}')
+                subprocess.check_call(shlex.split(f'gzip -9 {content_path}'))
                 content_path = content_path + '.gz'
 
         total_pushed_size = 0
