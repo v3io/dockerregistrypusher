@@ -197,14 +197,22 @@ class Registry:
 
             # for Kaniko compatibility - must be real tar.gzip and not just tar
             if os.path.splitext(layer)[1] == '.tar':
-                self._logger.debug(
-                    'File is not gzipped - compressing before upload',
-                    layer_path=layer_path,
-                )
 
-                gzip_cmd = shlex.split(f'gzip -9 {layer_path}')
-                out = subprocess.check_output(gzip_cmd, encoding='utf-8')
-                self._logger.debug('Finished gzip command', gzip_cmd=gzip_cmd, out=out)
+                # safety - handle cases where some race of corruption may have occurred, if .tar.gz is in place, skip
+                # compression and ignore the original
+                if not os.path.exists(layer_path + '.gz'):
+                    self._logger.debug(
+                        'Layer file is not gzipped - compressing before upload',
+                        layer_path=layer_path,
+                    )
+
+                    gzip_cmd = shlex.split(f'gzip -9 {layer_path}')
+                    out = subprocess.check_output(gzip_cmd, encoding='utf-8')
+                    self._logger.debug(
+                        'Finished gzip command', gzip_cmd=gzip_cmd, out=out
+                    )
+
+                # whether we compressed it now or beforehand, the new name has this new prefix by gzip
                 layer += '.gz'
                 layer_path += '.gz'
 
