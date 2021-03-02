@@ -6,6 +6,7 @@ import hashlib
 import urllib.parse
 import time
 import threading
+import subprocess
 
 import humanfriendly
 import requests
@@ -199,19 +200,31 @@ class Registry(object):
         return upload_url
 
     def _push_layer(self, layer_path, upload_url):
-        return self._chunked_upload(layer_path, upload_url)
+        return self._chunked_upload(layer_path, upload_url, gzip=True)
 
     def _push_config(self, layer_path, upload_url):
         self._chunked_upload(layer_path, upload_url)
 
-    def _chunked_upload(self, filepath, upload_url):
+    def _chunked_upload(self, filepath, initial_url, gzip=False):
         content_path = os.path.abspath(filepath)
         total_size = os.stat(filepath).st_size
+
+        # for kaniko compatibility - must be real tar.gzip and not just tar
+        if gzip:
+            if os.path.splitext(filepath)[1] == '.tar':
+                self._logger.debug('Failed is not gzipped and gzipped asked - compressing before upload',
+                                   filepath=filepath,
+                                   total_size=total_size)
+
+                subprocess.check_call(f'gzip -9 {content_path}')
+                content_path = content_path + '.gz'
+
         total_pushed_size = 0
         length_read = 0
         digest = None
         with open(content_path, "rb") as f:
             index = 0
+            upload_url = initial_url
             headers = {}
             sha256hash = hashlib.sha256()
 
