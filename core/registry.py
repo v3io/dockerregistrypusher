@@ -6,7 +6,6 @@ import hashlib
 import urllib.parse
 import time
 import threading
-import zlib
 
 import humanfriendly
 import requests
