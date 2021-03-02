@@ -152,6 +152,7 @@ class Registry(object):
             self._logger.log_and_raise(
                 'error',
                 'Failed to push manifest',
+                manifest=manifest,
                 image=image,
                 tag=tag,
                 status_code=response.status_code,
@@ -208,7 +209,6 @@ class Registry(object):
 
     def _chunked_upload(self, filepath, initial_url, gzip=False):
         content_path = os.path.abspath(filepath)
-        total_size = os.stat(filepath).st_size
 
         # for kaniko compatibility - must be real tar.gzip and not just tar
         if gzip:
@@ -218,11 +218,12 @@ class Registry(object):
                     'File is not gzipped - compressing before upload',
                     content_path=content_path,
                     new_content_path=new_content_path,
-                    total_size=total_size,
                 )
 
                 subprocess.check_call(shlex.split(f'gzip -9 {content_path}'))
                 content_path = new_content_path
+
+        total_size = os.stat(filepath).st_size
 
         total_pushed_size = 0
         length_read = 0
