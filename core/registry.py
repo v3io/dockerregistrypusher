@@ -211,7 +211,7 @@ class Registry:
                     gzip_cmd = shlex.split(f'gzip -9 -f {layer_path}')
                     out = subprocess.check_output(gzip_cmd, encoding='utf-8')
                     self._logger.debug(
-                        'Finished gzip command', gzip_cmd=gzip_cmd, out=out
+                        'Successfully gzipped layer', gzip_cmd=gzip_cmd, out=out
                     )
 
                 # whether we compressed it now or beforehand, the new name has this new prefix by gzip
