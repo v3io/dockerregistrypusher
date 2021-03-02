@@ -238,9 +238,9 @@ class Registry(object):
                 offset = index + len(chunk)
 
                 if gzip:
-                    headers['Content-Type'] = 'application/gzip'
-                else:
-                    headers['Content-Type'] = 'application/octet-stream'
+                    headers['Content-Encoding'] = 'gzip'
+
+                headers['Content-Type'] = 'application/octet-stream'
                 headers['Content-Length'] = str(len(chunk))
                 headers['Content-Range'] = f'{index}-{offset}'
                 index = offset
