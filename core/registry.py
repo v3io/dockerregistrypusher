@@ -213,14 +213,16 @@ class Registry(object):
         # for kaniko compatibility - must be real tar.gzip and not just tar
         if gzip:
             if os.path.splitext(filepath)[1] == '.tar':
+                new_content_path = content_path + '.gz'
                 self._logger.debug(
                     'File is not gzipped - compressing before upload',
-                    filepath=filepath,
+                    content_path=content_path,
+                    new_content_path=new_content_path,
                     total_size=total_size,
                 )
 
                 subprocess.check_call(shlex.split(f'gzip -9 {content_path}'))
-                content_path = content_path + '.gz'
+                content_path = new_content_path
 
         total_pushed_size = 0
         length_read = 0
@@ -235,7 +237,10 @@ class Registry(object):
                 length_read += len(chunk)
                 offset = index + len(chunk)
 
-                headers['Content-Type'] = 'application/octet-stream'
+                if gzip:
+                    headers['Content-Type'] = 'application/gzip'
+                else:
+                    headers['Content-Type'] = 'application/octet-stream'
                 headers['Content-Length'] = str(len(chunk))
                 headers['Content-Range'] = f'{index}-{offset}'
                 index = offset
