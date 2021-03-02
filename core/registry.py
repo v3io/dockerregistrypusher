@@ -211,17 +211,18 @@ class Registry(object):
         content_path = os.path.abspath(filepath)
 
         # for kaniko compatibility - must be real tar.gzip and not just tar
-        if gzip:
-            if os.path.splitext(filepath)[1] == '.tar':
-                new_content_path = content_path + '.gz'
-                self._logger.debug(
-                    'File is not gzipped - compressing before upload',
-                    content_path=content_path,
-                    new_content_path=new_content_path,
-                )
+        if gzip and os.path.splitext(filepath)[1] == '.tar':
+            new_content_path = content_path + '.gz'
+            self._logger.debug(
+                'File is not gzipped - compressing before upload',
+                content_path=content_path,
+                new_content_path=new_content_path,
+            )
 
-                subprocess.check_call(shlex.split(f'gzip -9 {content_path}'))
-                content_path = new_content_path
+            gzip_cmd = shlex.split(f'gzip -9 {content_path}')
+            out = subprocess.check_call(gzip_cmd)
+            self._logger.debug('Finished gzipping', gzip_cmd=gzip_cmd, out=out)
+            content_path = new_content_path
 
         total_size = os.stat(filepath).st_size
 
