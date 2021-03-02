@@ -34,15 +34,15 @@ class LayersLock:
 
 class Registry:
     def __init__(
-        self,
-        logger,
-        registry_url,
-        stream=False,
-        login=None,
-        password=None,
-        ssl_verify=True,
-        replace_tags_match=None,
-        replace_tags_target=None,
+            self,
+            logger,
+            registry_url,
+            stream=False,
+            login=None,
+            password=None,
+            ssl_verify=True,
+            replace_tags_match=None,
+            replace_tags_target=None,
     ):
         self._logger = logger.get_child('registry')
 
@@ -197,7 +197,26 @@ class Registry:
             layer_path = os.path.abspath(os.path.join(tmp_dir_name, layer))
 
             # for Kaniko compatibility - must be real tar.gzip and not just tar
-            if os.path.splitext(layer)[1] == '.tar':
+            if os.path.splitext(layer_path)[1].endswith('tar'):
+
+                # handle symlinks
+                if os.path.islink(layer_path):
+                    symlinked_path = os.path.realpath(layer_path)
+
+                    # symlink target missing (probably compressed tar -> tar.gz)
+                    compressed_symlinked_path = symlinked_path + '.gz'
+                    if not os.path.exists(symlinked_path) and os.path.exists(compressed_symlinked_path):
+
+                        # fix
+                        tmp_link_path = f'{layer_path}_tmplink'
+                        os.symlink(compressed_symlinked_path, tmp_link_path)
+                        os.rename(tmp_link_path, layer_path)
+                    elif not os.path.exists(symlinked_path):
+                        self._logger.log_and_raise('error',
+                                                   'Target for symlink is missing. Cannot continue pushing',
+                                                   symlinked_path=symlinked_path,
+                                                   layer_path=layer_path,
+                                                   image=image)
 
                 # safety - handle cases where some race of corruption may have occurred, if .tar.gz is in place, skip
                 # compression and ignore the original
@@ -208,11 +227,22 @@ class Registry:
                     )
 
                     # use -f to avoid "Too many levels of symbolic links" failures
-                    gzip_cmd = shlex.split(f'gzip -9 -f {layer_path}')
-                    out = subprocess.check_output(gzip_cmd, encoding='utf-8')
-                    self._logger.debug(
-                        'Successfully gzipped layer', gzip_cmd=gzip_cmd, out=out
-                    )
+                    try:
+                        # use -f to avoid "Too many levels of symbolic links" failures
+                        gzip_cmd = shlex.split(f'gzip -9 -f {layer_path}')
+                        out = subprocess.check_output(gzip_cmd, encoding='utf-8')
+                        self._logger.debug(
+                            'Successfully gzipped layer', gzip_cmd=gzip_cmd, out=out
+                        )
+
+                    # catch and print for debugging
+                    except Exception as exc:
+                        cmd = shlex.split(f'ls -latr {os.path.dirname(layer_path)}')
+                        out = subprocess.check_output(cmd, encoding='utf-8')
+                        self._logger.warn(
+                            'Finished ls command', cmd=cmd, out=out, orig_exc=exc,
+                        )
+                        raise
 
                 # whether we compressed it now or beforehand, the new name has this new prefix by gzip
                 layer += '.gz'
