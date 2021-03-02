@@ -6,6 +6,7 @@ import hashlib
 import urllib.parse
 import time
 import threading
+import zlib
 
 import humanfriendly
 import requests
@@ -134,7 +135,7 @@ class Registry(object):
         headers = {
             "Content-Type": "application/vnd.docker.distribution.manifest.v2+json"
         }
-        url = self._registry_url + "/v2/" + image + "/manifests/" + tag
+        url = f'{self._registry_url}/v2/{image}/manifests/{tag}'
         response = requests.put(
             url,
             headers=headers,
@@ -172,12 +173,12 @@ class Registry(object):
 
     def _initialize_push(self, repository):
         """
-        Request a push URL for the image repository for a layer or manifest
+        Request starting an upload for the image repository for a layer or manifest
         """
         self._logger.debug('Initializing push', repository=repository)
 
         response = requests.post(
-            self._registry_url + "/v2/" + repository + "/blobs/uploads/",
+            f'{self._registry_url}/v2/{repository}/blobs/uploads/',
             auth=self._basicauth,
             verify=self._ssl_verify,
         )
@@ -195,27 +196,28 @@ class Registry(object):
         return upload_url
 
     def _push_layer(self, layer_path, upload_url):
-        self._chunked_upload(layer_path, upload_url)
+        self._chunked_upload(layer_path, upload_url, gzip=True)
 
     def _push_config(self, layer_path, upload_url):
         self._chunked_upload(layer_path, upload_url)
 
-    def _chunked_upload(self, filepath, url):
+    def _chunked_upload(self, filepath, upload_url, gzip=False):
         content_path = os.path.abspath(filepath)
         content_size = os.stat(content_path).st_size
         with open(content_path, "rb") as f:
             index = 0
             headers = {}
-            upload_url = url
             sha256hash = hashlib.sha256()
 
             for chunk in self._read_in_chunks(f, sha256hash):
-                if "http" not in upload_url:
-                    upload_url = self._registry_url + upload_url
+                if gzip:
+                    chunk = zlib.compress(chunk)
+                    headers['Content-Encoding'] = 'gzip'
+
                 offset = index + len(chunk)
                 headers['Content-Type'] = 'application/octet-stream'
                 headers['Content-Length'] = str(len(chunk))
-                headers['Content-Range'] = '%s-%s' % (index, offset)
+                headers['Content-Range'] = f'{index}-{offset}'
                 index = offset
                 last = False
                 if offset == content_size:
@@ -227,15 +229,26 @@ class Registry(object):
                         + "%  ",
                         end="\r",
                     )
+
+                    # complete the upload
                     if last:
-                        digest_str = str(sha256hash.hexdigest())
-                        requests.put(
-                            f"{upload_url}&digest=sha256:{digest_str}",
+                        digest = f'sha256:{str(sha256hash.hexdigest())}'
+                        response = requests.put(
+                            f"{upload_url}&digest={digest}",
                             data=chunk,
                             headers=headers,
                             auth=self._basicauth,
                             verify=self._ssl_verify,
                         )
+                        if response.status_code != 201:
+                            self._logger.log_and_raise(
+                                'error',
+                                'Failed to complete upload',
+                                digest=digest,
+                                filepath=filepath,
+                                status_code=response.status_code,
+                                content=response.content,
+                            )
                     else:
                         response = requests.patch(
                             upload_url,
@@ -244,21 +257,36 @@ class Registry(object):
                             auth=self._basicauth,
                             verify=self._ssl_verify,
                         )
+
+                        if response.status_code != 202:
+                            self._logger.log_and_raise(
+                                'error',
+                                'Failed to upload chunk',
+                                digest=digest,
+                                filepath=filepath,
+                                status_code=response.status_code,
+                                content=response.content,
+                            )
+
                         if "Location" in response.headers:
                             upload_url = response.headers["Location"]
 
                 except Exception as exc:
-                    self._logger.error(
-                        'Failed to upload file image upload', filepath=filepath, exc=exc
+                    self._logger.log_and_raise(
+                        'error',
+                        'Failed to upload file',
+                        filepath=filepath,
+                        exc=exc,
                     )
-                    raise
             f.close()
 
         self._conditional_print("")
 
-    # chunk size default 2T (??)
     @staticmethod
     def _read_in_chunks(file_object, hashed, chunk_size=2097152):
+        """
+        Chunk size default 2T (monolithic upload)
+        """
         while True:
             data = file_object.read(chunk_size)
             hashed.update(data)

@@ -12,18 +12,18 @@ class ImageManifestCreator(object):
         manifest = dict()
         manifest["schemaVersion"] = 2
         manifest["mediaType"] = "application/vnd.docker.distribution.manifest.v2+json"
-        manifest["config"] = dict()
-        manifest["config"][
-            "mediaType"
-        ] = "application/vnd.docker.container.image.v1+json"
-        manifest["config"]["size"] = os.path.getsize(self._config_path)
-        manifest["config"]["digest"] = self._get_digest(self._config_path)
+        manifest["config"] = {
+            "mediaType": "application/vnd.docker.container.image.v1+json",
+            "size": os.path.getsize(self._config_path),
+            "digest": self._get_digest(self._config_path),
+        }
         manifest["layers"] = []
         for layer in self._layers_paths:
-            layer_data = dict()
-            layer_data["mediaType"] = "application/vnd.docker.image.rootfs.diff.tar.gzip"
-            layer_data["size"] = os.path.getsize(layer)
-            layer_data["digest"] = self._get_digest(layer)
+            layer_data = {
+                "mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
+                "size": os.path.getsize(layer),
+                "digest": self._get_digest(layer),
+            }
             manifest["layers"].append(layer_data)
 
         return json.dumps(manifest)
