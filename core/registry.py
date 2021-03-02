@@ -200,31 +200,24 @@ class Registry(object):
         return upload_url
 
     def _push_layer(self, layer_path, upload_url):
-        return self._chunked_upload(layer_path, upload_url, gzip=True)
+        return self._chunked_upload(layer_path, upload_url)
 
     def _push_config(self, layer_path, upload_url):
         self._chunked_upload(layer_path, upload_url)
 
-    def _chunked_upload(self, filepath, upload_url, gzip=False):
+    def _chunked_upload(self, filepath, upload_url):
         content_path = os.path.abspath(filepath)
-        uncompressed_size = os.stat(filepath).st_size
+        total_size = os.stat(filepath).st_size
         total_pushed_size = 0
-        uncompressed_length_read = 0
+        length_read = 0
         digest = None
         with open(content_path, "rb") as f:
             index = 0
             headers = {}
             sha256hash = hashlib.sha256()
 
-            for chunk in self._read_in_chunks(f):
-                uncompressed_length_read += len(chunk)
-                if gzip:
-                    chunk = zlib.compress(chunk)
-                    headers['Content-Encoding'] = 'gzip'
-
-                sha256hash.update(chunk)
-
-                total_pushed_size += len(chunk)
+            for chunk in self._read_in_chunks(f, sha256hash):
+                length_read += len(chunk)
                 offset = index + len(chunk)
 
                 headers['Content-Type'] = 'application/octet-stream'
@@ -232,12 +225,12 @@ class Registry(object):
                 headers['Content-Range'] = f'{index}-{offset}'
                 index = offset
                 last = False
-                if uncompressed_length_read == uncompressed_size:
+                if length_read == total_size:
                     last = True
                 try:
                     self._conditional_print(
                         "Pushing... "
-                        + str(round((offset / uncompressed_size) * 100, 2))
+                        + str(round((offset / total_size) * 100, 2))
                         + "%  ",
                         end="\r",
                     )
@@ -282,6 +275,7 @@ class Registry(object):
                         if "Location" in response.headers:
                             upload_url = response.headers["Location"]
 
+                    total_pushed_size += len(chunk)
                 except Exception as exc:
                     self._logger.log_and_raise(
                         'error',
@@ -294,12 +288,13 @@ class Registry(object):
         return digest, total_pushed_size
 
     @staticmethod
-    def _read_in_chunks(file_object, chunk_size=2097152):
+    def _read_in_chunks(file_object, hashed, chunk_size=2097152):
         """
         Chunk size default 2T
         """
         while True:
             data = file_object.read(chunk_size)
+            hashed.update(data)
             if not data:
                 break
             yield data
