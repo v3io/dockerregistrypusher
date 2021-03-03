@@ -6,14 +6,13 @@ import hashlib
 import urllib.parse
 import time
 import threading
-import shlex
-import subprocess
 
 import humanfriendly
 import requests
 import requests.auth
 
 from . import manifest_creator
+import utils.helpers
 
 
 class LayersLock:
@@ -61,7 +60,6 @@ class Registry:
             self._basicauth = requests.auth.HTTPBasicAuth(self._login, self._password)
 
         self._layers_lock = LayersLock()
-        self._layers_info = {}
 
         self._logger.debug(
             'Initialized',
@@ -84,7 +82,7 @@ class Registry:
 
         self._logger.info('Processing image', repo_tags=repo_tags)
         image_start_time = time.time()
-        config_parsed = self._load_json_file(config_path)
+        config_parsed = utils.helpers.load_json_file(config_path)
 
         # warning - spammy
         self._logger.verbose('Parsed image config', config_parsed=config_parsed)
@@ -185,91 +183,12 @@ class Registry:
         self._logger.debug('Acquiring layer lock', layer_key=layer_key)
         self._layers_lock.get_lock(layer_key).acquire()
         try:
-
-            # if layer_key in self._layers_info:
-            #     layer_info = self._layers_info[layer_key]
-            #     self._logger.info(
-            #         'Layer already pushed, skipping',
-            #         layer_key=layer_key,
-            #         layer_info=layer_info,
-            #     )
-            #     return layer_info['digest'], layer_info['size']
-
             layer_path = os.path.abspath(os.path.join(tmp_dir_name, layer))
-
-            # for Kaniko compatibility - must be real tar.gzip and not just tar
-            if os.path.splitext(layer_path)[1].endswith('tar'):
-
-                # handle symlinks
-                if os.path.islink(layer_path):
-                    symlinked_path = os.path.realpath(layer_path)
-                    self._logger.debug(
-                        'Found symlink layer',
-                        layer_path=layer_path,
-                        symlinked_path=symlinked_path,
-                    )
-
-                    # symlink target missing (probably compressed tar -> tar.gz)
-                    compressed_symlinked_path = symlinked_path + '.gz'
-                    if not os.path.exists(symlinked_path) and os.path.exists(
-                        compressed_symlinked_path
-                    ):
-
-                        # fix
-                        tmp_link_path = f'{layer_path}_tmplink'
-                        os.symlink(compressed_symlinked_path, tmp_link_path)
-                        os.unlink(layer_path)
-                        os.rename(tmp_link_path, layer_path)
-                    elif not os.path.exists(symlinked_path):
-                        self._logger.log_and_raise(
-                            'error',
-                            'Target for symlink is missing. Cannot continue pushing',
-                            symlinked_path=symlinked_path,
-                            layer_path=layer_path,
-                            image=image,
-                        )
-
-                # safety - handle cases where some race or corruption may have occurred, if .tar.gz is in place, skip
-                # compression and ignore the original
-                if not os.path.exists(layer_path + '.gz'):
-                    self._logger.debug(
-                        'Layer file is not gzipped - compressing before upload',
-                        layer_path=layer_path,
-                    )
-
-                    # use -f to avoid "Too many levels of symbolic links" failures
-                    try:
-                        # use -f to avoid "Too many levels of symbolic links" failures
-                        gzip_cmd = shlex.split(f'gzip -9 -f {layer_path}')
-                        out = subprocess.check_output(gzip_cmd, encoding='utf-8')
-                        self._logger.debug(
-                            'Successfully gzipped layer', gzip_cmd=gzip_cmd, out=out
-                        )
-
-                    # catch and print for debugging
-                    except Exception as exc:
-                        cmd = shlex.split(f'ls -latr {os.path.dirname(layer_path)}')
-                        out = subprocess.check_output(cmd, encoding='utf-8')
-                        self._logger.warn(
-                            'Finished ls command',
-                            cmd=cmd,
-                            out=out,
-                            orig_exc=exc,
-                        )
-                        raise
-
-                # whether we compressed it now or beforehand, the new name has this new prefix by gzip
-                layer += '.gz'
-                layer_path += '.gz'
 
             self._logger.info('Pushing layer', layer=layer)
             push_url = self._initialize_push(image)
 
             digest, size = self._push_layer(layer_path, push_url)
-            self._layers_info[layer_key] = {
-                'digest': digest,
-                'size': size,
-            }
             self._logger.info('Layer pushed', layer=layer, digest=digest, size=size)
             return digest, size
         finally:
@@ -322,9 +241,6 @@ class Registry:
             for chunk in self._read_in_chunks(f, sha256hash):
                 length_read += len(chunk)
                 offset = index + len(chunk)
-
-                if content_path.endswith('gz') or content_path.endswith('gzip'):
-                    headers['Content-Encoding'] = 'gzip'
 
                 headers['Content-Type'] = 'application/octet-stream'
                 headers['Content-Length'] = str(len(chunk))
@@ -433,8 +349,3 @@ class Registry:
                 )
 
         return orig_tag
-
-    @staticmethod
-    def _load_json_file(filepath):
-        with open(filepath, 'r') as fh:
-            return json.loads(fh.read())

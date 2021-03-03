@@ -1,6 +1,7 @@
 import os
-import hashlib
 import json
+
+import utils.helpers
 
 
 class ImageManifestCreator(object):
@@ -15,7 +16,7 @@ class ImageManifestCreator(object):
         manifest["config"] = {
             "mediaType": "application/vnd.docker.container.image.v1+json",
             "size": os.path.getsize(self._config_path),
-            "digest": self._get_digest(self._config_path),
+            "digest": utils.helpers.get_digest(self._config_path),
         }
         manifest["layers"] = []
         for layer_info in self._layers_info:
@@ -27,17 +28,3 @@ class ImageManifestCreator(object):
             manifest["layers"].append(layer_data)
 
         return json.dumps(manifest)
-
-    def _get_digest(self, filepath):
-        return "sha256:" + self.get_file_sha256(filepath)
-
-    @staticmethod
-    def get_file_sha256(filepath):
-        sha256hash = hashlib.sha256()
-        with open(filepath, "rb") as f:
-            while True:
-                data = f.read(65536)
-                sha256hash.update(data)
-                if not data:
-                    break
-        return sha256hash.hexdigest()
