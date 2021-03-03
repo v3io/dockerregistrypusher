@@ -202,6 +202,7 @@ class Registry:
                 # handle symlinks
                 if os.path.islink(layer_path):
                     symlinked_path = os.path.realpath(layer_path)
+                    self._logger.debug('Found symlink layer', layer_path=layer_path, symlinked_path=symlinked_path)
 
                     # symlink target missing (probably compressed tar -> tar.gz)
                     compressed_symlinked_path = symlinked_path + '.gz'
@@ -210,6 +211,7 @@ class Registry:
                         # fix
                         tmp_link_path = f'{layer_path}_tmplink'
                         os.symlink(compressed_symlinked_path, tmp_link_path)
+                        os.unlink(layer_path)
                         os.rename(tmp_link_path, layer_path)
                     elif not os.path.exists(symlinked_path):
                         self._logger.log_and_raise('error',
