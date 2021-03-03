@@ -93,7 +93,7 @@ class Registry:
             repo_tag_start_time = time.time()
             image, tag = self._parse_image_tag(repo)
             self._logger.info(
-                'Pushing image repo and tag',
+                'Processing image repo and tag',
                 image=image,
                 tag=tag,
                 tmp_dir_name=tmp_dir_name,
