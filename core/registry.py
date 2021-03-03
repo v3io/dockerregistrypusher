@@ -255,12 +255,12 @@ class Registry:
         return upload_url
 
     def _push_layer(self, layer_path, upload_url):
-        return self._chunked_upload(layer_path, upload_url, compress=True)
+        return self._chunked_upload(layer_path, upload_url)
 
     def _push_config(self, config_path, upload_url):
         self._chunked_upload(config_path, upload_url)
 
-    def _chunked_upload(self, filepath, initial_url, compress=False):
+    def _chunked_upload(self, filepath, initial_url):
         content_path = os.path.abspath(filepath)
         total_size = os.stat(content_path).st_size
 
@@ -271,7 +271,6 @@ class Registry:
             'Pushing layer',
             filepath=filepath,
             initial_url=initial_url,
-            compress=compress,
         )
         with open(content_path, "rb") as f:
             index = 0
@@ -282,16 +281,11 @@ class Registry:
             for chunk in self._read_in_chunks(f):
                 length_read += len(chunk)
                 offset = index + len(chunk)
-                request_body = chunk
 
-                if compress:
-                    headers['content-encoding'] = 'gzip'
-                    request_body = zlib.compress(chunk)
-
-                sha256hash.update(request_body)
+                sha256hash.update(chunk)
 
                 headers['Content-Type'] = 'application/octet-stream'
-                headers['Content-Length'] = str(len(request_body))
+                headers['Content-Length'] = str(len(chunk))
                 headers['Content-Range'] = f'{index}-{offset}'
 
                 index = offset
@@ -311,7 +305,7 @@ class Registry:
                         digest = f'sha256:{str(sha256hash.hexdigest())}'
                         response = requests.put(
                             f"{upload_url}&digest={digest}",
-                            data=request_body,
+                            data=chunk,
                             headers=headers,
                             auth=self._basicauth,
                             verify=self._ssl_verify,
@@ -328,7 +322,7 @@ class Registry:
                     else:
                         response = requests.patch(
                             upload_url,
-                            data=request_body,
+                            data=chunk,
                             headers=headers,
                             auth=self._basicauth,
                             verify=self._ssl_verify,

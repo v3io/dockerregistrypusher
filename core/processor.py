@@ -6,6 +6,7 @@ import pathlib
 import json
 import subprocess
 import shlex
+import gzip
 
 import humanfriendly
 
@@ -72,7 +73,7 @@ class Processor(object):
             self._extractor.extract_all(tmp_dir_name)
 
             # compress layers in place - for kaniko
-            # self._compress_layer_files(tmp_dir_name)
+            self._pre_process_contents(tmp_dir_name)
 
             manifest = self._get_manifest(tmp_dir_name)
             self._logger.debug('Extracted archive manifest', manifest=manifest)
@@ -101,48 +102,70 @@ class Processor(object):
             elapsed=humanfriendly.format_timespan(elapsed),
         )
 
-    def _compress_layer_files(self, root_dir):
+    def _pre_process_contents(self, root_dir):
         start_time = time.time()
+        self._logger.debug('Preprocessing extracted contents')
 
         # for Kaniko compatibility - must be real tar.gzip and not just tar
-        self._logger.info('Compressing all layer files (pre-processing)')
+        self._compress_layers(root_dir)
+        self._correct_symlinks(root_dir)
+        self._update_manifests(root_dir)
+
+        elapsed = time.time() - start_time
+        self._logger.info(
+            'Finished compressing all layer files (pre-processing)',
+            elapsed=humanfriendly.format_timespan(elapsed),
+        )
+
+    def _compress_layers(self, root_dir):
+        self._logger.debug('Compressing all layer files (pre-processing)')
         for tar_files in pathlib.Path(root_dir).rglob('*.tar'):
-            file_path = tar_files.absolute()
-            self._logger.info('Compressing file (.tar -> .tar.gz)', file_path=file_path)
+            file_path = str(tar_files.absolute())
+            gzipped_file_path = str(file_path) + '.gz'
 
             # safety - if .tar.gz is in place, skip
             # compression and ignore the original
-            if os.path.exists(str(file_path) + '.gz'):
+            if os.path.exists(gzipped_file_path):
                 self._logger.debug(
                     'Layer file is gzipped - skipping',
                     file_path=file_path,
-                    gzipped_path=str(file_path) + '.gz',
+                    gzipped_path=gzipped_file_path,
                 )
                 continue
 
             # use -f to avoid "Too many levels of symbolic links" failures
             try:
                 # use -f to avoid "Too many levels of symbolic links" failures
-                gzip_cmd = shlex.split(f'gzip -9 -f {file_path}')
-                out = subprocess.check_output(gzip_cmd, encoding='utf-8')
+
+                # inplace .tar ->.tar.gz
+                self._logger.info('Compressing layer file', file_path=file_path)
+
+                with open(file_path, 'rb') as f_in, gzip.open(gzipped_file_path, 'wb') as f_out:
+                    f_out.writelines(f_in)
+
                 self._logger.debug(
                     'Successfully gzipped layer',
-                    gzip_cmd=gzip_cmd,
-                    out=out,
+                    gzipped_file_path=gzipped_file_path,
                     file_path=file_path,
                 )
 
-            # catch and print for debugging
             except Exception as exc:
-                cmd = shlex.split(f'ls -latr {os.path.dirname(file_path)}')
-                out = subprocess.check_output(cmd, encoding='utf-8')
-                self._logger.warn(
-                    'Finished ls command',
-                    cmd=cmd,
-                    out=out,
-                    orig_exc=exc,
+
+                # print debugging info
+                layer_dir = pathlib.Path(file_path).parents[0]
+                files = layer_dir.glob('**/*')
+                self._logger.debug(
+                    'Listed elements in layer dir',
+                    files=files,
+                    layer_dir=layer_dir,
+                    exc=exc,
                 )
                 raise
+
+        self._logger.debug('Finished compressing all layer files')
+
+    def _correct_symlinks(self, root_dir):
+        self._logger.debug('Updating symlinks')
 
         # fix symlinks
         for root, dirs, files in os.walk(root_dir):
@@ -179,29 +202,34 @@ class Processor(object):
                             target_path=target_path,
                             path=path,
                         )
+        self._logger.debug('Finished updating symlinks')
+
+    def _update_manifests(self, root_dir):
         self._logger.debug('Correcting image manifests')
         manifest = self._get_manifest(root_dir)
-        for image_config in manifest:
-            config_filename = image_config["Config"]
+
+        for manifest_image_section in manifest:
+            config_filename = manifest_image_section["Config"]
 
             # rootfs.diff_ids contains layer digests - TODO change them?
             config_path = os.path.join(root_dir, config_filename)
-            config_parsed = utils.helpers.load_json_file(config_path)
+            image_config = utils.helpers.load_json_file(config_path)
 
             # warning - spammy
-            self._logger.verbose('Parsed image config', config_parsed=config_parsed)
-            for idx, layer in enumerate(image_config["Layers"]):
+            self._logger.verbose('Parsed image config', image_config=image_config)
+
+            for idx, layer in enumerate(manifest_image_section["Layers"]):
                 if layer.endswith('.tar'):
-                    image_config["Layers"][idx] = layer + '.gz'
+                    gzipped_layer_file_path = layer + '.gz'
+                    manifest_image_section["Layers"][idx] = gzipped_layer_file_path
+                    image_config["rootfs"]['diff_ids'][idx] = \
+                        utils.helpers.get_digest(os.path.join(root_dir, gzipped_layer_file_path))
+            self._logger.debug('Corrected image config', config_path=config_path, image_config=image_config)
+            utils.helpers.dump_json_file(config_path, image_config)
 
         # write modified image config
         self._write_manifest(root_dir, manifest)
-
-        elapsed = time.time() - start_time
-        self._logger.info(
-            'Finished compressing all layer files (pre-processing)',
-            elapsed=humanfriendly.format_timespan(elapsed),
-        )
+        self._logger.debug('Corrected image manifests', manifest=manifest)
 
     @staticmethod
     def _get_manifest(archive_dir):
