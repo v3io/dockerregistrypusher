@@ -199,7 +199,8 @@ class Processor(object):
 
         elapsed = time.time() - start_time
         self._logger.info(
-            'Finished compressing all layer files (pre-processing)', elapsed=elapsed
+            'Finished compressing all layer files (pre-processing)',
+            elapsed=humanfriendly.format_timespan(elapsed)
         )
 
     @staticmethod
