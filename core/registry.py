@@ -113,7 +113,10 @@ class Registry:
 
             # then, push image config
             self._logger.info(
-                'Pushing image config', image=image, config_loc=config_filename
+                'Pushing image config',
+                image=image,
+                config_loc=config_filename,
+                config_parsed=config_parsed,
             )
             push_url = self._initialize_push(image)
             self._push_config(config_path, push_url)
@@ -185,6 +188,38 @@ class Registry:
         try:
             layer_path = os.path.abspath(os.path.join(tmp_dir_name, layer))
 
+            digest = utils.helpers.get_digest(layer_path)
+            self._logger.debug(
+                'Check if layer exists in registry',
+                layer=layer,
+                image=image,
+                digest=digest,
+            )
+            response = requests.head(
+                f'{self._registry_url}/v2/{image}/blobs/{digest}',
+                auth=self._basicauth,
+                verify=self._ssl_verify,
+            )
+
+            if response.status_code == 200:
+                size = response.headers['Content-Length']
+                digest = response.headers['Docker-Content-Digest']
+                self._logger.info(
+                    'Layer exists in registry, skipping',
+                    layer=layer,
+                    image=image,
+                    size=size,
+                    digest=digest,
+                )
+                return digest, int(size)
+            self._logger.debug(
+                'Layer does not exist and will be pushed',
+                layer=layer,
+                image=image,
+                response_code=response.status_code,
+                response_content=response.content,
+            )
+
             self._logger.info('Pushing layer', layer=layer)
             push_url = self._initialize_push(image)
 
@@ -220,31 +255,40 @@ class Registry:
         return upload_url
 
     def _push_layer(self, layer_path, upload_url):
-        return self._chunked_upload(layer_path, upload_url)
+        return self._chunked_upload(layer_path, upload_url, compress=False)
 
     def _push_config(self, config_path, upload_url):
         self._chunked_upload(config_path, upload_url)
 
-    def _chunked_upload(self, filepath, initial_url):
+    def _chunked_upload(self, filepath, initial_url, compress=False):
         content_path = os.path.abspath(filepath)
         total_size = os.stat(content_path).st_size
 
         total_pushed_size = 0
         length_read = 0
         digest = None
+        self._logger.debug(
+            'Pushing layer',
+            filepath=filepath,
+            initial_url=initial_url,
+            compress=compress,
+        )
         with open(content_path, "rb") as f:
             index = 0
             upload_url = initial_url
             headers = {}
             sha256hash = hashlib.sha256()
 
-            for chunk in self._read_in_chunks(f, sha256hash):
+            for chunk in self._read_in_chunks(f):
                 length_read += len(chunk)
                 offset = index + len(chunk)
+                request_body = chunk
 
-                # compress
-                headers['content-encoding'] = 'gzip'
-                request_body = zlib.compress(chunk)
+                if compress:
+                    headers['content-encoding'] = 'gzip'
+                    request_body = zlib.compress(chunk)
+
+                sha256hash.update(request_body)
 
                 headers['Content-Type'] = 'application/octet-stream'
                 headers['Content-Length'] = str(len(request_body))
@@ -315,13 +359,12 @@ class Registry:
         return digest, total_pushed_size
 
     @staticmethod
-    def _read_in_chunks(file_object, hashed, chunk_size=2097152):
+    def _read_in_chunks(file_object, chunk_size=2097152):
         """
         Chunk size default 2T
         """
         while True:
             data = file_object.read(chunk_size)
-            hashed.update(data)
             if not data:
                 break
             yield data
