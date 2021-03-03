@@ -242,13 +242,13 @@ class Registry:
                 length_read += len(chunk)
                 offset = index + len(chunk)
 
-                headers['Content-Type'] = 'application/octet-stream'
-                headers['Content-Length'] = str(len(chunk))
-                headers['Content-Range'] = f'{index}-{offset}'
-
                 # compress
                 headers['content-encoding'] = 'gzip'
                 request_body = zlib.compress(chunk)
+
+                headers['Content-Type'] = 'application/octet-stream'
+                headers['Content-Length'] = str(len(request_body))
+                headers['Content-Range'] = f'{index}-{offset}'
 
                 index = offset
                 last = False
