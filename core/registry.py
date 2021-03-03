@@ -258,6 +258,7 @@ class Registry:
                 'digest': digest,
                 'size': size,
             }
+            self._logger.info('Layer pushed', layer=layer, digest=digest, size=size)
             return digest, size
         finally:
             self._logger.debug('Releasing layer lock', layer_key=layer_key)
