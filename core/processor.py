@@ -140,7 +140,9 @@ class Processor(object):
                 # inplace .tar ->.tar.gz
                 self._logger.info('Compressing layer file', file_path=file_path)
 
-                with open(file_path, 'rb') as f_in, gzip.open(gzipped_file_path, 'wb') as f_out:
+                with open(file_path, 'rb') as f_in, gzip.open(
+                    gzipped_file_path, 'wb'
+                ) as f_out:
                     f_out.writelines(f_in)
 
                 self._logger.debug(
@@ -222,9 +224,14 @@ class Processor(object):
                 if layer.endswith('.tar'):
                     gzipped_layer_file_path = layer + '.gz'
                     manifest_image_section["Layers"][idx] = gzipped_layer_file_path
-                    image_config["rootfs"]['diff_ids'][idx] = \
-                        utils.helpers.get_digest(os.path.join(root_dir, gzipped_layer_file_path))
-            self._logger.debug('Corrected image config', config_path=config_path, image_config=image_config)
+                    image_config["rootfs"]['diff_ids'][idx] = utils.helpers.get_digest(
+                        os.path.join(root_dir, gzipped_layer_file_path)
+                    )
+            self._logger.debug(
+                'Corrected image config',
+                config_path=config_path,
+                image_config=image_config,
+            )
             utils.helpers.dump_json_file(config_path, image_config)
 
         # write modified image config
