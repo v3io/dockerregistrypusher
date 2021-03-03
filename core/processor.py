@@ -195,7 +195,7 @@ class Processor(object):
                     image_config["Layers"][idx] = layer + '.gz'
 
         # write modified image config
-        self._write_manifest(root_dir)
+        self._write_manifest(root_dir, manifest)
 
         elapsed = time.time() - start_time
         self._logger.info(
