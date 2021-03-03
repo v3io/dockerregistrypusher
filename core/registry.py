@@ -34,15 +34,15 @@ class LayersLock:
 
 class Registry:
     def __init__(
-            self,
-            logger,
-            registry_url,
-            stream=False,
-            login=None,
-            password=None,
-            ssl_verify=True,
-            replace_tags_match=None,
-            replace_tags_target=None,
+        self,
+        logger,
+        registry_url,
+        stream=False,
+        login=None,
+        password=None,
+        ssl_verify=True,
+        replace_tags_match=None,
+        replace_tags_target=None,
     ):
         self._logger = logger.get_child('registry')
 
@@ -203,11 +203,17 @@ class Registry:
                 # handle symlinks
                 if os.path.islink(layer_path):
                     symlinked_path = os.path.realpath(layer_path)
-                    self._logger.debug('Found symlink layer', layer_path=layer_path, symlinked_path=symlinked_path)
+                    self._logger.debug(
+                        'Found symlink layer',
+                        layer_path=layer_path,
+                        symlinked_path=symlinked_path,
+                    )
 
                     # symlink target missing (probably compressed tar -> tar.gz)
                     compressed_symlinked_path = symlinked_path + '.gz'
-                    if not os.path.exists(symlinked_path) and os.path.exists(compressed_symlinked_path):
+                    if not os.path.exists(symlinked_path) and os.path.exists(
+                        compressed_symlinked_path
+                    ):
 
                         # fix
                         tmp_link_path = f'{layer_path}_tmplink'
@@ -215,11 +221,13 @@ class Registry:
                         os.unlink(layer_path)
                         os.rename(tmp_link_path, layer_path)
                     elif not os.path.exists(symlinked_path):
-                        self._logger.log_and_raise('error',
-                                                   'Target for symlink is missing. Cannot continue pushing',
-                                                   symlinked_path=symlinked_path,
-                                                   layer_path=layer_path,
-                                                   image=image)
+                        self._logger.log_and_raise(
+                            'error',
+                            'Target for symlink is missing. Cannot continue pushing',
+                            symlinked_path=symlinked_path,
+                            layer_path=layer_path,
+                            image=image,
+                        )
 
                 # safety - handle cases where some race or corruption may have occurred, if .tar.gz is in place, skip
                 # compression and ignore the original
@@ -243,7 +251,10 @@ class Registry:
                         cmd = shlex.split(f'ls -latr {os.path.dirname(layer_path)}')
                         out = subprocess.check_output(cmd, encoding='utf-8')
                         self._logger.warn(
-                            'Finished ls command', cmd=cmd, out=out, orig_exc=exc,
+                            'Finished ls command',
+                            cmd=cmd,
+                            out=out,
+                            orig_exc=exc,
                         )
                         raise
 
