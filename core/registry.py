@@ -6,7 +6,7 @@ import hashlib
 import urllib.parse
 import time
 import threading
-
+import zlib
 import humanfriendly
 import requests
 import requests.auth
@@ -245,6 +245,11 @@ class Registry:
                 headers['Content-Type'] = 'application/octet-stream'
                 headers['Content-Length'] = str(len(chunk))
                 headers['Content-Range'] = f'{index}-{offset}'
+
+                # compress
+                headers['content-encoding'] = 'gzip'
+                request_body = zlib.compress(chunk)
+
                 index = offset
                 last = False
                 if length_read == total_size:
@@ -262,7 +267,7 @@ class Registry:
                         digest = f'sha256:{str(sha256hash.hexdigest())}'
                         response = requests.put(
                             f"{upload_url}&digest={digest}",
-                            data=chunk,
+                            data=request_body,
                             headers=headers,
                             auth=self._basicauth,
                             verify=self._ssl_verify,
@@ -279,7 +284,7 @@ class Registry:
                     else:
                         response = requests.patch(
                             upload_url,
-                            data=chunk,
+                            data=request_body,
                             headers=headers,
                             auth=self._basicauth,
                             verify=self._ssl_verify,

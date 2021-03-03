@@ -72,7 +72,7 @@ class Processor(object):
             self._extractor.extract_all(tmp_dir_name)
 
             # compress layers in place - for kaniko
-            self._compress_layer_files(tmp_dir_name)
+            # self._compress_layer_files(tmp_dir_name)
 
             manifest = self._get_manifest(tmp_dir_name)
             self._logger.debug('Extracted archive manifest', manifest=manifest)
