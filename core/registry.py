@@ -255,7 +255,7 @@ class Registry:
         return upload_url
 
     def _push_layer(self, layer_path, upload_url):
-        return self._chunked_upload(layer_path, upload_url, compress=False)
+        return self._chunked_upload(layer_path, upload_url, compress=True)
 
     def _push_config(self, config_path, upload_url):
         self._chunked_upload(config_path, upload_url)
