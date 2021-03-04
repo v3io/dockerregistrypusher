@@ -146,9 +146,9 @@ class Processor(object):
                 if not os.path.islink(path):
                     continue
 
-                target_path = os.readlink(path)
+                target_path = str(os.readlink(path))
 
-                if str(target_path).endswith('layer.tar'):
+                if target_path.endswith('layer.tar'):
                     self._logger.debug(
                         'Found link to tar layer, pointing to compressed',
                         target_path=target_path,
@@ -156,7 +156,7 @@ class Processor(object):
                     )
 
                     # try and fix - point to tar.gz
-                    new_target_path = target_path + bytes(gzip_ext)
+                    new_target_path = target_path + gzip_ext
                     tmp_link_path = f'{target_path}_tmplink'
                     os.symlink(new_target_path, tmp_link_path)
                     os.unlink(path)
