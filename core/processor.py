@@ -157,7 +157,7 @@ class Processor(object):
 
                     # try and fix - point to tar.gz
                     new_target_path = target_path + gzip_ext
-                    tmp_link_path = f'{target_path}_tmplink'
+                    tmp_link_path = f'{path}_tmplink'
                     os.symlink(new_target_path, tmp_link_path)
                     os.unlink(path)
                     os.rename(tmp_link_path, path)
