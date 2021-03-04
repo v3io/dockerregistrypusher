@@ -75,8 +75,8 @@ class Registry:
         Processing a single image entry from extracted files - pushing to registry
         """
         repo_tags = image_config["RepoTags"]
-        config_filename = image_config["Config"]
-        config_path = os.path.join(tmp_dir_name, config_filename)
+        config_path_relative = image_config["Config"]
+        config_path = os.path.join(tmp_dir_name, config_path_relative)
 
         self._logger.info('Processing image', repo_tags=repo_tags)
         image_start_time = time.time()
@@ -114,20 +114,20 @@ class Registry:
             self._logger.info(
                 'Pushing image config',
                 image=image,
-                config_loc=config_filename,
+                config_path=config_path,
                 config_parsed=config_parsed,
             )
             push_url = self._initialize_push(image)
             digest, size = self._push_config(config_path, push_url)
             config_info = {'digest': digest, 'size': size}
             # Now we need to create and push a manifest for the image
-            creator = image_manifest_creator.ImageManifestCreator(
-                config_path, manifest_layer_info, config_info
-            )
-            image_manifest = creator.create()
 
             # Override tags if needed: from --replace-tags-match and --replace-tags-target
             tag = self._replace_tag(image, tag)
+
+            image_manifest = image_manifest_creator.ImageManifestCreator(
+                image, tag, config_path, manifest_layer_info, config_info
+            ).create()
 
             self._logger.info(
                 'Pushing image tag manifest',
@@ -264,8 +264,8 @@ class Registry:
     def _push_config(self, config_path, upload_url):
         return self._chunked_upload(config_path, upload_url)
 
-    def _chunked_upload(self, filepath, initial_url):
-        content_path = os.path.abspath(filepath)
+    def _chunked_upload(self, file_path, initial_url):
+        content_path = os.path.abspath(file_path)
         total_size = os.stat(content_path).st_size
         response_digest = None
 
@@ -274,7 +274,7 @@ class Registry:
         digest = None
         self._logger.debug(
             'Pushing chunked content',
-            filepath=filepath,
+            file_path=file_path,
             initial_url=initial_url,
             total_size=humanfriendly.format_size(total_size, binary=True),
         )
@@ -321,7 +321,7 @@ class Registry:
                                 'error',
                                 'Failed to complete upload',
                                 digest=digest,
-                                filepath=filepath,
+                                filepath=file_path,
                                 status_code=response.status_code,
                                 content=response.content,
                             )
@@ -340,7 +340,7 @@ class Registry:
                             self._logger.log_and_raise(
                                 'error',
                                 'Failed to upload chunk',
-                                filepath=filepath,
+                                filepath=file_path,
                                 status_code=response.status_code,
                                 content=response.content,
                             )
@@ -354,7 +354,7 @@ class Registry:
                     self._logger.log_and_raise(
                         'error',
                         'Failed to upload file',
-                        filepath=filepath,
+                        filepath=file_path,
                         exc=exc,
                     )
 
@@ -365,7 +365,7 @@ class Registry:
                     'File size and pushed size differ, inconsistency detected',
                     total_pushed_size=total_pushed_size,
                     total_size=total_size,
-                    filepath=filepath,
+                    filepath=file_path,
                 )
             if response_digest != digest:
                 self._logger.log_and_raise(
@@ -373,7 +373,7 @@ class Registry:
                     'Server-side digest different from client digest',
                     response_digest=response_digest,
                     digest=digest,
-                    filepath=filepath,
+                    filepath=file_path,
                 )
 
         self._stream_print("")

@@ -5,7 +5,9 @@ import utils.helpers
 
 
 class ImageManifestCreator(object):
-    def __init__(self, config_path, layers_info, config_info):
+    def __init__(self, name, tag, config_path, layers_info, config_info):
+        self._name = name
+        self._tag = tag
         self._config_path = config_path
         self._layers_info = layers_info
         self._config_info = config_info

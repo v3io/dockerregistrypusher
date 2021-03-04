@@ -123,9 +123,10 @@ class Processor(object):
         self._logger.debug('Preprocessing extracted contents')
 
         # for Kaniko compatibility - must be real tar.gzip and not just tar
-        self._compress_layers(root_dir)
-        self._correct_symlinks(root_dir)
-        self._update_manifests(root_dir)
+        gzip_ext = '.gz'
+        self._compress_layers(root_dir, gzip_ext)
+        self._correct_symlinks(root_dir, gzip_ext)
+        self._update_manifests(root_dir, gzip_ext)
 
         elapsed = time.time() - start_time
         self._logger.info(
@@ -133,11 +134,12 @@ class Processor(object):
             elapsed=humanfriendly.format_timespan(elapsed),
         )
 
-    def _compress_layers(self, root_dir):
+    def _compress_layers(self, root_dir, gzip_ext):
         self._logger.debug('Compressing all layer files (pre-processing)')
+
         for tar_files in pathlib.Path(root_dir).rglob('*.tar'):
             file_path = str(tar_files.absolute())
-            gzipped_file_path = str(file_path) + '.gz'
+            gzipped_file_path = str(file_path) + gzip_ext
 
             # safety - if .tar.gz is in place, skip
             # compression and ignore the original
@@ -149,11 +151,9 @@ class Processor(object):
                 )
                 continue
 
-            # use -f to avoid "Too many levels of symbolic links" failures
             try:
-                # use -f to avoid "Too many levels of symbolic links" failures
 
-                # inplace .tar ->.tar.gz
+                # .tar ->.tar.gzip
                 self._logger.info('Compressing layer file', file_path=file_path)
 
                 with open(file_path, 'rb') as f_in, gzip.open(
@@ -183,7 +183,7 @@ class Processor(object):
 
         self._logger.debug('Finished compressing all layer files')
 
-    def _correct_symlinks(self, root_dir):
+    def _correct_symlinks(self, root_dir, gzip_ext):
         self._logger.debug('Updating symlinks')
 
         # fix symlinks
@@ -203,7 +203,7 @@ class Processor(object):
                     )
 
                     # try and fix - point to tar.gz
-                    new_target_path = target_path + b'.gz'
+                    new_target_path = target_path + bytes(gzip_ext)
                     if os.path.exists(new_target_path):
                         tmp_link_path = f'{target_path}_tmplink'
                         os.symlink(new_target_path, tmp_link_path)
@@ -223,7 +223,7 @@ class Processor(object):
                         )
         self._logger.debug('Finished updating symlinks')
 
-    def _update_manifests(self, root_dir):
+    def _update_manifests(self, root_dir, gzip_ext):
         self._logger.debug('Correcting image manifests')
         manifest = self._get_manifest(root_dir)
 
@@ -237,22 +237,18 @@ class Processor(object):
 
             for idx, layer in enumerate(manifest_image_section["Layers"]):
                 if layer.endswith('.tar'):
-                    gzipped_layer_file_path = layer + '.gz'
+                    gzipped_layer_file_path = layer + gzip_ext
                     manifest_image_section["Layers"][idx] = gzipped_layer_file_path
-                    image_config["rootfs"]['diff_ids'][idx] = utils.helpers.get_digest(
-                        os.path.join(root_dir, gzipped_layer_file_path)
-                    )
-                    self._logger.debug(
-                        'XXX - layer has sha256',
-                        gzipped_layer_file_path=gzipped_layer_file_path,
-                        digest=image_config["rootfs"]['diff_ids'][idx],
-                    )
+                    # image_config["rootfs"]['diff_ids'][idx] = utils.helpers.get_digest(
+                    #     os.path.join(root_dir, gzipped_layer_file_path)
+                    # )
+
             self._logger.debug(
                 '',
                 config_path=config_path,
                 image_config=image_config,
             )
-            utils.helpers.dump_json_file(config_path, image_config)
+            # utils.helpers.dump_json_file(config_path, image_config)
 
         # write modified image config
         self._write_manifest(root_dir, manifest)
@@ -283,11 +279,12 @@ class Processor(object):
                     'digest_from_image_config': digest_from_image_config,
                     'layer_idx': layer_idx,
                 }
-                self._logger.debug('Digests comparison passed', **log_kwargs)
-                if digest_from_image_config != digest_from_image_config:
-                    self._logger.log_and_raise(
-                        'error', 'Failed layer digest validation', **log_kwargs
-                    )
+                if digest_from_image_config == digest_from_image_config:
+                    self._logger.debug('Digests comparison passed', **log_kwargs)
+                # else:
+                #     self._logger.log_and_raise(
+                #         'error', 'Failed layer digest validation', **log_kwargs
+                #     )
 
         self._logger.debug('Finished config/manifest verification', manifest=manifest)
 

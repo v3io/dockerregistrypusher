@@ -129,7 +129,7 @@ def register_arguments(parser):
     parser.add_argument(
         '--gzip-layers',
         help='Gzip all layers (pre-processing) before pushing',
-        type=bool,
+        action='store_true',
         default=False,
     )
 
