@@ -124,8 +124,8 @@ class Processor(object):
 
         # for Kaniko compatibility - must be real tar.gzip and not just tar
         gzip_ext = '.gz'
-        self._compress_layers(root_dir, gzip_ext)
         self._correct_symlinks(root_dir, gzip_ext)
+        self._compress_layers(root_dir, gzip_ext)
         self._update_manifests(root_dir, gzip_ext)
 
         elapsed = time.time() - start_time
@@ -133,6 +133,40 @@ class Processor(object):
             'Finished compressing all layer files (pre-processing)',
             elapsed=humanfriendly.format_timespan(elapsed),
         )
+
+    def _correct_symlinks(self, root_dir, gzip_ext):
+        self._logger.debug('Updating symlinks to compressed layers')
+
+        # move layer symlinks to gz files, even if they are not there
+        for root, dirs, files in os.walk(root_dir):
+            for filename in files:
+                path = os.path.join(root, filename)
+
+                # If it's not a symlink we're not interested.
+                if not os.path.islink(path):
+                    continue
+
+                target_path = os.readlink(path)
+
+                if target_path.endswith(b'layer.tar'):
+                    self._logger.debug(
+                        'Found link to tar layer, pointing to compressed',
+                        target_path=target_path,
+                        path=path,
+                    )
+
+                    # try and fix - point to tar.gz
+                    new_target_path = target_path + bytes(gzip_ext)
+                    tmp_link_path = f'{target_path}_tmplink'
+                    os.symlink(new_target_path, tmp_link_path)
+                    os.unlink(path)
+                    os.rename(tmp_link_path, path)
+                    self._logger.debug(
+                        'Moved layer link to compressed target',
+                        new_target_path=new_target_path,
+                        path=path,
+                    )
+        self._logger.debug('Finished updating symlinks')
 
     def _compress_layers(self, root_dir, gzip_ext):
         self._logger.debug('Compressing all layer files (pre-processing)')
@@ -182,46 +216,6 @@ class Processor(object):
                 raise
 
         self._logger.debug('Finished compressing all layer files')
-
-    def _correct_symlinks(self, root_dir, gzip_ext):
-        self._logger.debug('Updating symlinks')
-
-        # fix symlinks
-        for root, dirs, files in os.walk(root_dir):
-            for filename in files:
-                path = os.path.join(root, filename)
-
-                # If it's not a symlink we're not interested.
-                if not os.path.islink(path):
-                    continue
-
-                target_path = os.readlink(path)
-
-                if not os.path.exists(target_path):
-                    self._logger.debug(
-                        'Found broken link', target_path=target_path, path=path
-                    )
-
-                    # try and fix - point to tar.gz
-                    new_target_path = target_path + bytes(gzip_ext)
-                    if os.path.exists(new_target_path):
-                        tmp_link_path = f'{target_path}_tmplink'
-                        os.symlink(new_target_path, tmp_link_path)
-                        os.unlink(path)
-                        os.rename(tmp_link_path, path)
-                        self._logger.debug(
-                            'Fixed broken link',
-                            new_target_path=new_target_path,
-                            path=path,
-                        )
-                    else:
-                        self._logger.log_and_raise(
-                            'error',
-                            'Cannot fix broken link',
-                            target_path=target_path,
-                            path=path,
-                        )
-        self._logger.debug('Finished updating symlinks')
 
     def _update_manifests(self, root_dir, gzip_ext):
         self._logger.debug('Correcting image manifests')
