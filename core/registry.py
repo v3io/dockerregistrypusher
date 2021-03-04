@@ -118,18 +118,18 @@ class Registry:
                 config_parsed=config_parsed,
             )
             push_url = self._initialize_push(image)
-            self._push_config(config_path, push_url)
-
+            digest, size = self._push_config(config_path, push_url)
+            config_info = {'digest': digest, 'size': size}
             # Now we need to create and push a manifest for the image
             creator = image_manifest_creator.ImageManifestCreator(
-                config_path, manifest_layer_info
+                config_path, manifest_layer_info, config_info
             )
             image_manifest = creator.create()
 
             # Override tags if needed: from --replace-tags-match and --replace-tags-target
             tag = self._replace_tag(image, tag)
 
-            self._logger.info('Pushing image tag manifest', image=image, tag=tag)
+            self._logger.info('Pushing image tag manifest', image=image, tag=tag, image_manifest=image_manifest)
             self._push_manifest(image_manifest, image, tag)
             repo_tag_elapsed = time.time() - repo_tag_start_time
             self._logger.info(
@@ -257,11 +257,12 @@ class Registry:
         return self._chunked_upload(layer_path, upload_url)
 
     def _push_config(self, config_path, upload_url):
-        self._chunked_upload(config_path, upload_url)
+        return self._chunked_upload(config_path, upload_url)
 
     def _chunked_upload(self, filepath, initial_url):
         content_path = os.path.abspath(filepath)
         total_size = os.stat(content_path).st_size
+        response_digest = None
 
         total_pushed_size = 0
         length_read = 0
@@ -319,6 +320,8 @@ class Registry:
                                 status_code=response.status_code,
                                 content=response.content,
                             )
+
+                        response_digest = response.headers["Docker-Content-Digest"]
                     else:
                         response = requests.patch(
                             upload_url,
@@ -359,15 +362,20 @@ class Registry:
                     total_size=total_size,
                     filepath=filepath,
                 )
+            if response_digest != digest:
+                self._logger.log_and_raise(
+                    'error',
+                    'Server-side digest different from client digest',
+                    response_digest=response_digest,
+                    digest=digest,
+                    filepath=filepath,
+                )
 
         self._stream_print("")
-        return digest, total_pushed_size
+        return response_digest, total_pushed_size
 
     @staticmethod
-    def _read_in_chunks(file_object, chunk_size=65536):
-        """
-        Chunk size default 2T
-        """
+    def _read_in_chunks(file_object, chunk_size=256 * (1024 ** 2)):
         while True:
             data = file_object.read(chunk_size)
             if not data:

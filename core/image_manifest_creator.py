@@ -5,9 +5,10 @@ import utils.helpers
 
 
 class ImageManifestCreator(object):
-    def __init__(self, config_path, layers_info):
+    def __init__(self, config_path, layers_info, config_info):
         self._config_path = config_path
         self._layers_info = layers_info
+        self._config_info = config_info
 
     def create(self):
         manifest = dict()
@@ -15,12 +16,12 @@ class ImageManifestCreator(object):
         manifest["mediaType"] = "application/vnd.docker.distribution.manifest.v2+json"
         manifest["config"] = {
             "mediaType": "application/vnd.docker.container.image.v1+json",
-            "size": os.path.getsize(self._config_path),
-            "digest": utils.helpers.get_digest(self._config_path),
+            "size": self._config_info['size'],
+            "digest": self._config_info['digest'],
         }
         manifest["layers"] = []
         for layer_info in self._layers_info:
-            if layer_info['ext'].endswith('gz'):
+            if layer_info['ext'].endswith('gz') or layer_info['ext'].endswith('gzip'):
                 media_type = "application/vnd.docker.image.rootfs.diff.tar.gzip"
             else:
                 media_type = "application/vnd.docker.image.rootfs.diff.tar"

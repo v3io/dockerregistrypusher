@@ -108,8 +108,7 @@ class Processor(object):
             for res in results:
                 res.get()
         finally:
-            # shutil.rmtree(tmp_dir_name)
-            pass
+            shutil.rmtree(tmp_dir_name)
 
         elapsed = time.time() - start_time
         self._logger.info(
