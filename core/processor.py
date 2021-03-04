@@ -3,9 +3,8 @@ import multiprocessing.pool
 import time
 import os.path
 import pathlib
+import shutil
 import json
-import subprocess
-import shlex
 import gzip
 
 import humanfriendly
@@ -19,10 +18,13 @@ class Processor(object):
     def __init__(
         self,
         logger,
+        tmp_dir,
+        tmp_dir_override,
         parallel,
         registry_url,
         archive_path,
         stream=False,
+        gzip_layers=False,
         login=None,
         password=None,
         ssl_verify=True,
@@ -31,6 +33,9 @@ class Processor(object):
     ):
         self._logger = logger
         self._parallel = parallel
+        self._tmp_dir = tmp_dir
+        self._tmp_dir_override = tmp_dir_override
+        self._gzip_layers = gzip_layers
 
         if parallel > 1 and stream:
             self._logger.info(
@@ -60,8 +65,14 @@ class Processor(object):
         """
         start_time = time.time()
         results = []
-        with tempfile.TemporaryDirectory() as tmp_dir_name:
+        if self._tmp_dir_override:
+            tmp_dir_name = self._tmp_dir_override
+            os.mkdir(tmp_dir_name, 0o700)
+        else:
+            tmp_dir_name = tempfile.mkdtemp(dir=self._tmp_dir)
 
+        # since we're not always using TemporaryDirectory we're making and cleaning up ourselves
+        try:
             self._logger.info(
                 'Processing archive',
                 archive_path=self._extractor.archive_path,
@@ -72,9 +83,11 @@ class Processor(object):
             # extract the whole thing
             self._extractor.extract_all(tmp_dir_name)
 
-            # compress layers in place - for kaniko
-            self._pre_process_contents(tmp_dir_name)
+            # pre-process layers in place - for kaniko
+            if self._gzip_layers:
+                self._pre_process_contents(tmp_dir_name)
 
+            self._verify_configs_integrity(tmp_dir_name)
             manifest = self._get_manifest(tmp_dir_name)
             self._logger.debug('Extracted archive manifest', manifest=manifest)
 
@@ -91,9 +104,12 @@ class Processor(object):
                 pool.close()
                 pool.join()
 
-        # this will throw if any pool worker caught an exception
-        for res in results:
-            res.get()
+            # this will throw if any pool worker caught an exception
+            for res in results:
+                res.get()
+        finally:
+            # shutil.rmtree(tmp_dir_name)
+            pass
 
         elapsed = time.time() - start_time
         self._logger.info(
@@ -127,7 +143,7 @@ class Processor(object):
             # compression and ignore the original
             if os.path.exists(gzipped_file_path):
                 self._logger.debug(
-                    'Layer file is gzipped - skipping',
+                    'Layer file is already gzipped - skipping',
                     file_path=file_path,
                     gzipped_path=gzipped_file_path,
                 )
@@ -145,6 +161,7 @@ class Processor(object):
                 ) as f_out:
                     f_out.writelines(f_in)
 
+                os.remove(file_path)
                 self._logger.debug(
                     'Successfully gzipped layer',
                     gzipped_file_path=gzipped_file_path,
@@ -212,8 +229,6 @@ class Processor(object):
 
         for manifest_image_section in manifest:
             config_filename = manifest_image_section["Config"]
-
-            # rootfs.diff_ids contains layer digests - TODO change them?
             config_path = os.path.join(root_dir, config_filename)
             image_config = utils.helpers.load_json_file(config_path)
 
@@ -227,8 +242,13 @@ class Processor(object):
                     image_config["rootfs"]['diff_ids'][idx] = utils.helpers.get_digest(
                         os.path.join(root_dir, gzipped_layer_file_path)
                     )
+                    self._logger.debug(
+                        'XXX - layer has sha256',
+                        gzipped_layer_file_path=gzipped_layer_file_path,
+                        digest=image_config["rootfs"]['diff_ids'][idx],
+                    )
             self._logger.debug(
-                'Corrected image config',
+                '',
                 config_path=config_path,
                 image_config=image_config,
             )
@@ -237,6 +257,39 @@ class Processor(object):
         # write modified image config
         self._write_manifest(root_dir, manifest)
         self._logger.debug('Corrected image manifests', manifest=manifest)
+
+    def _verify_configs_integrity(self, root_dir):
+        self._logger.debug('Verifying configurations consistency')
+        manifest = self._get_manifest(root_dir)
+
+        # check for layer mismatches
+        for manifest_image_section in manifest:
+            config_filename = manifest_image_section["Config"]
+            config_path = os.path.join(root_dir, config_filename)
+            image_config = utils.helpers.load_json_file(config_path)
+
+            # warning - spammy
+            self._logger.debug('Parsed image config', image_config=image_config)
+
+            for layer_idx, layer in enumerate(manifest_image_section["Layers"]):
+                self._logger.debug(
+                    'Inspecting layer', image_config=config_path, layer_idx=layer_idx
+                )
+                layer_path = os.path.join(root_dir, layer)
+                digest_from_manifest_path = utils.helpers.get_digest(layer_path)
+                digest_from_image_config = image_config['rootfs']['diff_ids'][layer_idx]
+                log_kwargs = {
+                    'digest_from_manifest_path': digest_from_manifest_path,
+                    'digest_from_image_config': digest_from_image_config,
+                    'layer_idx': layer_idx,
+                }
+                self._logger.debug('Digests comparison passed', **log_kwargs)
+                if digest_from_image_config != digest_from_image_config:
+                    self._logger.log_and_raise(
+                        'error', 'Failed layer digest validation', **log_kwargs
+                    )
+
+        self._logger.debug('Finished config/manifest verification', manifest=manifest)
 
     @staticmethod
     def _get_manifest(archive_dir):

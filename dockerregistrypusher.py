@@ -28,10 +28,13 @@ def run(args):
     # initialize and start processing
     processor = core.Processor(
         logger=logger,
+        tmp_dir=args.tmp_dir,
+        tmp_dir_override=args.tmp_dir_override,
         parallel=args.parallel,
         registry_url=args.registry_url,
         archive_path=args.archive_path,
         stream=args.stream,
+        gzip_layers=args.gzip_layers,
         login=args.login,
         password=args.password,
         ssl_verify=args.ssl_verify,
@@ -66,6 +69,22 @@ def register_arguments(parser):
         help='Control parallelism (threads)',
         type=int,
         default=1,
+    )
+
+    parser.add_argument(
+        '-td',
+        '--tmp-dir',
+        help='Create the temporary workspace inside this dir (optional)',
+        type=str,
+        required=False,
+    )
+
+    parser.add_argument(
+        '-tdo',
+        '--tmp-dir-override',
+        help='Use this dir as the temporary workspace (optional)',
+        type=str,
+        required=False,
     )
 
     parser.add_argument(
@@ -105,6 +124,13 @@ def register_arguments(parser):
         help='Add some streaming logging during push',
         type=bool,
         default=True,
+    )
+
+    parser.add_argument(
+        '--gzip-layers',
+        help='Gzip all layers (pre-processing) before pushing',
+        type=bool,
+        default=False,
     )
 
     parser.add_argument(

@@ -1,17 +1,15 @@
 import os
 import os.path
 import re
-import json
 import hashlib
 import urllib.parse
 import time
 import threading
-import zlib
 import humanfriendly
 import requests
 import requests.auth
 
-from . import manifest_creator
+from . import image_manifest_creator
 import utils.helpers
 
 
@@ -108,6 +106,7 @@ class Registry:
                     {
                         'digest': layer_digest,
                         'size': layer_size,
+                        'ext': os.path.splitext(layer)[1],
                     }
                 )
 
@@ -122,7 +121,7 @@ class Registry:
             self._push_config(config_path, push_url)
 
             # Now we need to create and push a manifest for the image
-            creator = manifest_creator.ImageManifestCreator(
+            creator = image_manifest_creator.ImageManifestCreator(
                 config_path, manifest_layer_info
             )
             image_manifest = creator.create()
@@ -147,7 +146,7 @@ class Registry:
             elapsed=humanfriendly.format_timespan(image_elapsed),
         )
 
-    def _conditional_print(self, what, end=None):
+    def _stream_print(self, what, end=None):
         if self._stream:
             if end:
                 print(what, end=end)
@@ -202,7 +201,7 @@ class Registry:
             )
 
             if response.status_code == 200:
-                size = response.headers['Content-Length']
+                size = int(response.headers['Content-Length'])
                 digest = response.headers['Docker-Content-Digest']
                 self._logger.info(
                     'Layer exists in registry, skipping',
@@ -211,7 +210,7 @@ class Registry:
                     size=size,
                     digest=digest,
                 )
-                return digest, int(size)
+                return digest, size
             self._logger.debug(
                 'Layer does not exist and will be pushed',
                 layer=layer,
@@ -268,9 +267,10 @@ class Registry:
         length_read = 0
         digest = None
         self._logger.debug(
-            'Pushing layer',
+            'Pushing chunked content',
             filepath=filepath,
             initial_url=initial_url,
+            total_size=humanfriendly.format_size(total_size, binary=True),
         )
         with open(content_path, "rb") as f:
             index = 0
@@ -293,7 +293,7 @@ class Registry:
                 if length_read == total_size:
                     last = True
                 try:
-                    self._conditional_print(
+                    self._stream_print(
                         "Pushing... "
                         + str(round((offset / total_size) * 100, 2))
                         + "%  ",
@@ -341,6 +341,7 @@ class Registry:
                             upload_url = response.headers["Location"]
 
                     total_pushed_size += len(chunk)
+
                 except Exception as exc:
                     self._logger.log_and_raise(
                         'error',
@@ -349,11 +350,21 @@ class Registry:
                         exc=exc,
                     )
 
-        self._conditional_print("")
+            # sanity
+            if total_pushed_size != total_size:
+                self._logger.log_and_raise(
+                    'error',
+                    'File size and pushed size differ, inconsistency detected',
+                    total_pushed_size=total_pushed_size,
+                    total_size=total_size,
+                    filepath=filepath,
+                )
+
+        self._stream_print("")
         return digest, total_pushed_size
 
     @staticmethod
-    def _read_in_chunks(file_object, chunk_size=2097152):
+    def _read_in_chunks(file_object, chunk_size=65536):
         """
         Chunk size default 2T
         """
