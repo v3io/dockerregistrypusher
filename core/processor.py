@@ -148,7 +148,7 @@ class Processor(object):
 
                 target_path = os.readlink(path)
 
-                if target_path.endswith(b'layer.tar'):
+                if str(target_path).endswith('layer.tar'):
                     self._logger.debug(
                         'Found link to tar layer, pointing to compressed',
                         target_path=target_path,
