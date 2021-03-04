@@ -109,6 +109,7 @@ class Processor(object):
                 res.get()
         finally:
             shutil.rmtree(tmp_dir_name)
+            self._logger.verbose('Removed workdir', tmp_dir_name=tmp_dir_name)
 
         elapsed = time.time() - start_time
         self._logger.info(

@@ -129,7 +129,12 @@ class Registry:
             # Override tags if needed: from --replace-tags-match and --replace-tags-target
             tag = self._replace_tag(image, tag)
 
-            self._logger.info('Pushing image tag manifest', image=image, tag=tag, image_manifest=image_manifest)
+            self._logger.info(
+                'Pushing image tag manifest',
+                image=image,
+                tag=tag,
+                image_manifest=image_manifest,
+            )
             self._push_manifest(image_manifest, image, tag)
             repo_tag_elapsed = time.time() - repo_tag_start_time
             self._logger.info(
