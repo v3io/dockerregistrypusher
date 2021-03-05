@@ -115,7 +115,6 @@ class Registry:
                 'Pushing image config',
                 image=image,
                 config_path=config_path,
-                config_parsed=config_parsed,
             )
             push_url = self._initialize_push(image)
             digest, size = self._push_config(config_path, push_url)
@@ -129,7 +128,7 @@ class Registry:
                 image, tag, config_path, manifest_layer_info, config_info
             ).create()
 
-            self._logger.info(
+            self._logger.debug(
                 'Pushing image tag manifest',
                 image=image,
                 tag=tag,

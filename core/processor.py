@@ -84,10 +84,8 @@ class Processor(object):
             self._extractor.extract_all(tmp_dir_name)
 
             # pre-process layers in place - for kaniko
-            if self._gzip_layers:
-                self._pre_process_contents(tmp_dir_name)
+            self._pre_process_contents(tmp_dir_name)
 
-            self._verify_configs_integrity(tmp_dir_name)
             manifest = self._get_manifest(tmp_dir_name)
             self._logger.debug('Extracted archive manifest', manifest=manifest)
 
@@ -120,6 +118,9 @@ class Processor(object):
 
     def _pre_process_contents(self, root_dir):
         start_time = time.time()
+        if not self._gzip_layers:
+            return
+
         self._logger.debug('Preprocessing extracted contents')
 
         # for Kaniko compatibility - must be real tar.gzip and not just tar
@@ -130,7 +131,7 @@ class Processor(object):
 
         elapsed = time.time() - start_time
         self._logger.info(
-            'Finished compressing all layer files (pre-processing)',
+            'Finished preprocessing archive contents',
             elapsed=humanfriendly.format_timespan(elapsed),
         )
 
@@ -169,20 +170,50 @@ class Processor(object):
         self._logger.debug('Finished updating symlinks')
 
     def _compress_layers(self, root_dir, gzip_ext):
-        self._logger.debug('Compressing all layer files (pre-processing)')
+        """
+        we do this in 2 passes, because some layers are symlinked and we re-pointed them to tar.gz earlier, we must
+        skip them first, since they are broken symlinks. first gzip all non-linked layers, then do another pass and
+        gzip the symlinked ones.
+        """
+        self._logger.debug(
+            'Compressing all layer files (pre-processing)', processes=self._parallel
+        )
+        results = []
 
-        # we do this in 2 passes, because some layers are symlinked and we re-pointed them to tar.gz earlier, we must
-        # skip them first, since they are broken symlinks. first gzip all non-linked layers, then do another pass and
-        # gzip the symlinked ones.
         self._logger.debug('Compressing non symlink layers')
-        for element in pathlib.Path(root_dir).rglob('*.tar'):
-            file_path = str(element.absolute())
-            self._compress_layer(file_path, gzip_ext, compress_symlinks=False)
+        with multiprocessing.pool.ThreadPool(processes=self._parallel) as pool:
+            for element in pathlib.Path(root_dir).rglob('*.tar'):
+                file_path = str(element.absolute())
+                res = pool.apply_async(
+                    self._compress_layer,
+                    (file_path, gzip_ext, False),
+                )
+                results.append(res)
 
+            pool.close()
+            pool.join()
+
+        # this will throw if any pool worker caught an exception
+        for res in results:
+            res.get()
+
+        results = []
         self._logger.debug('Compressing symlink layers')
-        for element in pathlib.Path(root_dir).rglob('*.tar'):
-            file_path = str(element.absolute())
-            self._compress_layer(file_path, gzip_ext, compress_symlinks=True)
+        with multiprocessing.pool.ThreadPool(processes=self._parallel) as pool:
+            for element in pathlib.Path(root_dir).rglob('*.tar'):
+                file_path = str(element.absolute())
+                res = pool.apply_async(
+                    self._compress_layer,
+                    (file_path, gzip_ext, True),
+                )
+                results.append(res)
+
+            pool.close()
+            pool.join()
+
+        # this will throw if any pool worker caught an exception
+        for res in results:
+            res.get()
 
         self._logger.debug('Finished compressing all layer files')
 
@@ -270,40 +301,6 @@ class Processor(object):
         # write modified image config
         self._write_manifest(root_dir, manifest)
         self._logger.debug('Corrected image manifests', manifest=manifest)
-
-    def _verify_configs_integrity(self, root_dir):
-        self._logger.debug('Verifying configurations consistency')
-        manifest = self._get_manifest(root_dir)
-
-        # check for layer mismatches
-        for manifest_image_section in manifest:
-            config_filename = manifest_image_section["Config"]
-            config_path = os.path.join(root_dir, config_filename)
-            image_config = utils.helpers.load_json_file(config_path)
-
-            # warning - spammy
-            self._logger.debug('Parsed image config', image_config=image_config)
-
-            for layer_idx, layer in enumerate(manifest_image_section["Layers"]):
-                self._logger.debug(
-                    'Inspecting layer', image_config=config_path, layer_idx=layer_idx
-                )
-                layer_path = os.path.join(root_dir, layer)
-                digest_from_manifest_path = utils.helpers.get_digest(layer_path)
-                digest_from_image_config = image_config['rootfs']['diff_ids'][layer_idx]
-                log_kwargs = {
-                    'digest_from_manifest_path': digest_from_manifest_path,
-                    'digest_from_image_config': digest_from_image_config,
-                    'layer_idx': layer_idx,
-                }
-                if digest_from_image_config == digest_from_image_config:
-                    self._logger.debug('Digests comparison passed', **log_kwargs)
-                # else:
-                #     self._logger.log_and_raise(
-                #         'error', 'Failed layer digest validation', **log_kwargs
-                #     )
-
-        self._logger.debug('Finished config/manifest verification', manifest=manifest)
 
     @staticmethod
     def _get_manifest(archive_dir):
