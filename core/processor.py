@@ -171,9 +171,24 @@ class Processor(object):
     def _compress_layers(self, root_dir, gzip_ext):
         self._logger.debug('Compressing all layer files (pre-processing)')
 
-        for tar_files in pathlib.Path(root_dir).rglob('*.tar'):
-            file_path = str(tar_files.absolute())
-            gzipped_file_path = str(file_path) + gzip_ext
+        # we do this in 2 passes, because some layers are symlinked and we re-pointed them to tar.gz earlier, we must
+        # skip them first, since they are broken symlinks. first gzip all non-linked layers, then do another pass and
+        # gzip the symlinked ones.
+        self._logger.debug('Compressing non symlink layers')
+        for element in pathlib.Path(root_dir).rglob('*.tar'):
+            file_path = str(element.absolute())
+            self._compress_layer(file_path, gzip_ext, compress_symlinks=False)
+
+        self._logger.debug('Compressing symlink layers')
+        for element in pathlib.Path(root_dir).rglob('*.tar'):
+            file_path = str(element.absolute())
+            self._compress_layer(file_path, gzip_ext, compress_symlinks=True)
+
+        self._logger.debug('Finished compressing all layer files')
+
+    def _compress_layer(self, file_path, gzip_ext, compress_symlinks):
+        try:
+            gzipped_file_path = file_path + gzip_ext
 
             # safety - if .tar.gz is in place, skip
             # compression and ignore the original
@@ -183,39 +198,47 @@ class Processor(object):
                     file_path=file_path,
                     gzipped_path=gzipped_file_path,
                 )
-                continue
+                return
 
-            try:
+            if os.path.islink(file_path) != compress_symlinks:
+                if compress_symlinks:
+                    log_message = (
+                        'Layer file is not a symlink (symlinks only requested) - skipping',
+                    )
+                else:
+                    log_message = (
+                        'Layer file is a symlink (non-symlinks requested) - skipping',
+                    )
+                self._logger.debug(log_message, file_path=file_path)
+                return
 
-                # .tar ->.tar.gzip
-                self._logger.info('Compressing layer file', file_path=file_path)
+            # .tar ->.tar.gzip
+            self._logger.info('Compressing layer file', file_path=file_path)
 
-                with open(file_path, 'rb') as f_in, gzip.open(
-                    gzipped_file_path, 'wb'
-                ) as f_out:
-                    f_out.writelines(f_in)
+            with open(file_path, 'rb') as f_in, gzip.open(
+                gzipped_file_path, 'wb'
+            ) as f_out:
+                f_out.writelines(f_in)
 
-                os.remove(file_path)
-                self._logger.debug(
-                    'Successfully gzipped layer',
-                    gzipped_file_path=gzipped_file_path,
-                    file_path=file_path,
-                )
+            os.remove(file_path)
+            self._logger.debug(
+                'Successfully gzipped layer',
+                gzipped_file_path=gzipped_file_path,
+                file_path=file_path,
+            )
 
-            except Exception as exc:
+        except Exception as exc:
 
-                # print debugging info
-                layer_dir = pathlib.Path(file_path).parents[0]
-                files = layer_dir.glob('**/*')
-                self._logger.debug(
-                    'Listed elements in layer dir',
-                    files=files,
-                    layer_dir=layer_dir,
-                    exc=exc,
-                )
-                raise
-
-        self._logger.debug('Finished compressing all layer files')
+            # print debugging info
+            layer_dir = pathlib.Path(file_path).parents[0]
+            files = layer_dir.glob('**/*')
+            self._logger.debug(
+                'Listed elements in layer dir',
+                files=[f for f in files],
+                layer_dir=layer_dir,
+                exc=exc,
+            )
+            raise
 
     def _update_manifests(self, root_dir, gzip_ext):
         self._logger.debug('Correcting image manifests')
