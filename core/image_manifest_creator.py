@@ -20,12 +20,8 @@ class ImageManifestCreator(object):
         }
         manifest["layers"] = []
         for layer_info in self._layers_info:
-            if layer_info['ext'].endswith('gz') or layer_info['ext'].endswith('gzip'):
-                media_type = "application/vnd.docker.image.rootfs.diff.tar.gzip"
-            else:
-                media_type = "application/vnd.docker.image.rootfs.diff.tar.gzip"
             layer_data = {
-                "mediaType": media_type,
+                "mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
                 "size": layer_info['size'],
                 "digest": layer_info['digest'],
             }

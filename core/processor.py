@@ -35,7 +35,6 @@ class Processor(object):
         self._parallel = parallel
         self._tmp_dir = tmp_dir
         self._tmp_dir_override = tmp_dir_override
-        self._gzip_layers = gzip_layers
 
         if parallel > 1 and stream:
             self._logger.info(
@@ -46,6 +45,7 @@ class Processor(object):
 
         self._registry = registry.Registry(
             logger=self._logger,
+            gzip_layers=gzip_layers,
             registry_url=registry_url,
             stream=stream,
             login=login,

@@ -33,6 +33,7 @@ class Registry:
     def __init__(
         self,
         logger,
+        gzip_layers,
         registry_url,
         stream=False,
         login=None,
@@ -42,6 +43,7 @@ class Registry:
         replace_tags_target=None,
     ):
         self._logger = logger.get_child('registry')
+        self._gzip_layers = gzip_layers
 
         # enrich http suffix if missing
         if urllib.parse.urlparse(registry_url).scheme not in ['http', 'https']:
@@ -106,7 +108,6 @@ class Registry:
                     {
                         'digest': layer_digest,
                         'size': layer_size,
-                        'ext': os.path.splitext(layer)[1],
                     }
                 )
 
@@ -279,7 +280,7 @@ class Registry:
         return upload_url
 
     def _push_layer(self, layer_path, upload_url):
-        return self._chunked_upload(layer_path, upload_url, gzip=True)
+        return self._chunked_upload(layer_path, upload_url, gzip=self._gzip_layers)
 
     def _push_config(self, config_path, upload_url):
         return self._chunked_upload(config_path, upload_url)
@@ -287,16 +288,15 @@ class Registry:
     def _chunked_upload(self, file_path, initial_url, gzip=False):
         content_path = os.path.abspath(file_path)
         total_size = os.stat(content_path).st_size
-        response_digest = None
 
         total_pushed_size = 0
         length_read = 0
-        digest = None
         self._logger.debug(
             'Pushing chunked content',
             file_path=file_path,
             initial_url=initial_url,
             total_size=humanfriendly.format_size(total_size, binary=True),
+            gzip=gzip,
         )
 
         with open(content_path, "rb") as f:
@@ -307,6 +307,7 @@ class Registry:
 
             if gzip:
                 f_read = gzip_stream.GZIPCompressedStream(f, compression_level=9)
+                headers['Content-Encoding'] = 'gzip'
             else:
                 f_read = f
             for chunk in self._read_in_chunks(f_read):
@@ -314,15 +315,11 @@ class Registry:
                 offset = index + len(chunk)
                 sha256hash.update(chunk)
 
-                headers['Content-Encoding'] = 'gzip'
                 headers['Content-Type'] = 'application/octet-stream'
                 headers['Content-Length'] = str(len(chunk))
                 headers['Content-Range'] = f'{index}-{offset}'
 
                 index = offset
-                last = False
-                if length_read == total_size:
-                    last = True
                 try:
                     self._stream_print(
                         "Pushing... "
@@ -331,49 +328,25 @@ class Registry:
                         end="\r",
                     )
 
-                    # complete the upload
-                    if last:
-                        self._logger.debug('Pushing last')
-                        digest = f'sha256:{str(sha256hash.hexdigest())}'
-                        response = requests.put(
-                            f"{upload_url}&digest={digest}",
-                            data=chunk,
-                            headers=headers,
-                            auth=self._basicauth,
-                            verify=self._ssl_verify,
-                        )
-                        if response.status_code != 201:
-                            self._logger.log_and_raise(
-                                'error',
-                                'Failed to complete upload',
-                                digest=digest,
-                                filepath=file_path,
-                                status_code=response.status_code,
-                                content=response.content,
-                            )
+                    response = requests.patch(
+                        upload_url,
+                        data=chunk,
+                        headers=headers,
+                        auth=self._basicauth,
+                        verify=self._ssl_verify,
+                    )
 
-                        response_digest = response.headers["Docker-Content-Digest"]
-                    else:
-                        self._logger.debug('Pushing')
-                        response = requests.patch(
-                            upload_url,
-                            data=chunk,
-                            headers=headers,
-                            auth=self._basicauth,
-                            verify=self._ssl_verify,
+                    if response.status_code != 202:
+                        self._logger.log_and_raise(
+                            'error',
+                            'Failed to upload chunk',
+                            filepath=file_path,
+                            status_code=response.status_code,
+                            content=response.content,
                         )
 
-                        if response.status_code != 202:
-                            self._logger.log_and_raise(
-                                'error',
-                                'Failed to upload chunk',
-                                filepath=file_path,
-                                status_code=response.status_code,
-                                content=response.content,
-                            )
-
-                        if "Location" in response.headers:
-                            upload_url = response.headers["Location"]
+                    if "Location" in response.headers:
+                        upload_url = response.headers["Location"]
 
                     total_pushed_size += len(chunk)
 
@@ -385,40 +358,29 @@ class Registry:
                         exc=exc,
                     )
 
-            if not last:
-                self._logger.debug('Pushing last (empty)')
-                headers = {}
-                headers['Content-Length'] = "0"
+            # request the finalizing put, no body
+            headers = {'Content-Length': "0"}
 
-                # we compressed so don't know when the last was
-                digest = f'sha256:{str(sha256hash.hexdigest())}'
-                response = requests.put(
-                    f"{upload_url}&digest={digest}",
-                    headers=headers,
-                    auth=self._basicauth,
-                    verify=self._ssl_verify,
+            # we compressed so don't know when the last was
+            digest = f'sha256:{str(sha256hash.hexdigest())}'
+            response = requests.put(
+                f"{upload_url}&digest={digest}",
+                headers=headers,
+                auth=self._basicauth,
+                verify=self._ssl_verify,
+            )
+            if response.status_code != 201:
+                self._logger.log_and_raise(
+                    'error',
+                    'Failed to complete upload retroactively',
+                    digest=digest,
+                    filepath=file_path,
+                    status_code=response.status_code,
+                    content=response.content,
                 )
-                if response.status_code != 201:
-                    self._logger.log_and_raise(
-                        'error',
-                        'Failed to complete upload retroactively',
-                        digest=digest,
-                        filepath=file_path,
-                        status_code=response.status_code,
-                        content=response.content,
-                    )
 
-                response_digest = response.headers["Docker-Content-Digest"]
+            response_digest = response.headers["Docker-Content-Digest"]
 
-            # sanity
-            # if total_pushed_size != total_size:
-            #     self._logger.log_and_raise(
-            #         'error',
-            #         'File size and pushed size differ, inconsistency detected',
-            #         total_pushed_size=total_pushed_size,
-            #         total_size=total_size,
-            #         filepath=file_path,
-            #     )
             if response_digest != digest or response_digest is None:
                 self._logger.log_and_raise(
                     'error',
