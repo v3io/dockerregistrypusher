@@ -9,7 +9,7 @@ import humanfriendly
 import requests
 import requests.auth
 
-from . import image_manifest_creator
+from . import image_manifest_creator, gzip_stream
 import utils.helpers
 
 
@@ -116,6 +116,7 @@ class Registry:
                 image=image,
                 config_path=config_path,
             )
+            # self._change_config(config_path, manifest_layer_info)
             push_url = self._initialize_push(image)
             digest, size = self._push_config(config_path, push_url)
             config_info = {'digest': digest, 'size': size}
@@ -148,6 +149,26 @@ class Registry:
             'Image pushed',
             repo_tags=repo_tags,
             elapsed=humanfriendly.format_timespan(image_elapsed),
+        )
+
+    def _change_config(self, config_path, layers_info):
+        contents = utils.helpers.load_json_file(config_path)
+
+        # sanity
+        if len(contents['rootfs']['diff_ids']) != len(layers_info):
+            self._logger.log_and_raise(
+                'error',
+                'Mismatch in layer count for config',
+                orig_num=len(contents['rootfs']['diff_ids']),
+                layers_info_num=len(layers_info),
+                config_path=config_path,
+            )
+
+        for idx, layer_info in enumerate(layers_info):
+            contents['rootfs']['diff_ids'][idx] = layer_info['digest']
+        utils.helpers.dump_json_file(config_path, contents)
+        self._logger.info(
+            'Corrected image config digests', contents=contents, config_path=config_path
         )
 
     def _stream_print(self, what, end=None):
@@ -258,12 +279,12 @@ class Registry:
         return upload_url
 
     def _push_layer(self, layer_path, upload_url):
-        return self._chunked_upload(layer_path, upload_url)
+        return self._chunked_upload(layer_path, upload_url, gzip=True)
 
     def _push_config(self, config_path, upload_url):
         return self._chunked_upload(config_path, upload_url)
 
-    def _chunked_upload(self, file_path, initial_url):
+    def _chunked_upload(self, file_path, initial_url, gzip=False):
         content_path = os.path.abspath(file_path)
         total_size = os.stat(content_path).st_size
         response_digest = None
@@ -277,18 +298,23 @@ class Registry:
             initial_url=initial_url,
             total_size=humanfriendly.format_size(total_size, binary=True),
         )
+
         with open(content_path, "rb") as f:
             index = 0
             upload_url = initial_url
             headers = {}
             sha256hash = hashlib.sha256()
 
-            for chunk in self._read_in_chunks(f):
+            if gzip:
+                f_read = gzip_stream.GZIPCompressedStream(f, compression_level=9)
+            else:
+                f_read = f
+            for chunk in self._read_in_chunks(f_read):
                 length_read += len(chunk)
                 offset = index + len(chunk)
-
                 sha256hash.update(chunk)
 
+                headers['Content-Encoding'] = 'gzip'
                 headers['Content-Type'] = 'application/octet-stream'
                 headers['Content-Length'] = str(len(chunk))
                 headers['Content-Range'] = f'{index}-{offset}'
@@ -307,6 +333,7 @@ class Registry:
 
                     # complete the upload
                     if last:
+                        self._logger.debug('Pushing last')
                         digest = f'sha256:{str(sha256hash.hexdigest())}'
                         response = requests.put(
                             f"{upload_url}&digest={digest}",
@@ -327,6 +354,7 @@ class Registry:
 
                         response_digest = response.headers["Docker-Content-Digest"]
                     else:
+                        self._logger.debug('Pushing')
                         response = requests.patch(
                             upload_url,
                             data=chunk,
@@ -357,16 +385,41 @@ class Registry:
                         exc=exc,
                     )
 
-            # sanity
-            if total_pushed_size != total_size:
-                self._logger.log_and_raise(
-                    'error',
-                    'File size and pushed size differ, inconsistency detected',
-                    total_pushed_size=total_pushed_size,
-                    total_size=total_size,
-                    filepath=file_path,
+            if not last:
+                self._logger.debug('Pushing last (empty)')
+                headers = {}
+                headers['Content-Length'] = "0"
+
+                # we compressed so don't know when the last was
+                digest = f'sha256:{str(sha256hash.hexdigest())}'
+                response = requests.put(
+                    f"{upload_url}&digest={digest}",
+                    headers=headers,
+                    auth=self._basicauth,
+                    verify=self._ssl_verify,
                 )
-            if response_digest != digest:
+                if response.status_code != 201:
+                    self._logger.log_and_raise(
+                        'error',
+                        'Failed to complete upload retroactively',
+                        digest=digest,
+                        filepath=file_path,
+                        status_code=response.status_code,
+                        content=response.content,
+                    )
+
+                response_digest = response.headers["Docker-Content-Digest"]
+
+            # sanity
+            # if total_pushed_size != total_size:
+            #     self._logger.log_and_raise(
+            #         'error',
+            #         'File size and pushed size differ, inconsistency detected',
+            #         total_pushed_size=total_pushed_size,
+            #         total_size=total_size,
+            #         filepath=file_path,
+            #     )
+            if response_digest != digest or response_digest is None:
                 self._logger.log_and_raise(
                     'error',
                     'Server-side digest different from client digest',

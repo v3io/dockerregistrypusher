@@ -84,7 +84,7 @@ class Processor(object):
             self._extractor.extract_all(tmp_dir_name)
 
             # pre-process layers in place - for kaniko
-            self._pre_process_contents(tmp_dir_name)
+            # self._pre_process_contents(tmp_dir_name)
 
             manifest = self._get_manifest(tmp_dir_name)
             self._logger.debug('Extracted archive manifest', manifest=manifest)

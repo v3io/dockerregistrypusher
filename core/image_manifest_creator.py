@@ -1,7 +1,4 @@
-import os
 import json
-
-import utils.helpers
 
 
 class ImageManifestCreator(object):
@@ -26,7 +23,7 @@ class ImageManifestCreator(object):
             if layer_info['ext'].endswith('gz') or layer_info['ext'].endswith('gzip'):
                 media_type = "application/vnd.docker.image.rootfs.diff.tar.gzip"
             else:
-                media_type = "application/vnd.docker.image.rootfs.diff.tar"
+                media_type = "application/vnd.docker.image.rootfs.diff.tar.gzip"
             layer_data = {
                 "mediaType": media_type,
                 "size": layer_info['size'],
