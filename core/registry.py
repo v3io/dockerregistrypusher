@@ -128,7 +128,7 @@ class Registry:
             tag = self._replace_tag(image, tag)
 
             image_manifest = image_manifest_creator.ImageManifestCreator(
-                image, tag, config_path, manifest_layer_info, config_info
+                config_path, manifest_layer_info, config_info
             ).create()
 
             self._logger.debug(
