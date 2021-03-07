@@ -11,11 +11,13 @@ class GZIPCompressedStream(io.RawIOBase):
         self._stream = stream
 
         self._compressed_stream = io.BytesIO()
+
+        # writes into self._compressed_stream
         self._compressor = gzip.GzipFile(
             mode='wb', fileobj=self._compressed_stream, compresslevel=compression_level
         )
 
-        # because of the GZIP header written by `GzipFile.__init__`:
+        # because of the GZIP header written by GzipFile.__init__
         self._compressed_stream.seek(0)
 
     @property
@@ -29,11 +31,6 @@ class GZIPCompressedStream(io.RawIOBase):
     def readable(self) -> bool:
         return True
 
-    def _read_compressed_into(self, b: memoryview) -> int:
-        buf = self._compressed_stream.read(len(b))
-        b[: len(buf)] = buf
-        return len(buf)
-
     def readinto(self, b: bytearray) -> int:
         b = memoryview(b)
 
@@ -42,16 +39,24 @@ class GZIPCompressedStream(io.RawIOBase):
         while offset < size:
             offset += self._read_compressed_into(b[offset:])
             if offset < size:
+
                 # self._compressed_buffer now empty
                 if self._compressor.closed:
+
                     # nothing to compress anymore
                     break
+
                 # compress next bytes
-                self._read_n_compress(size)
+                self._read_and_compress(size)
 
         return offset
 
-    def _read_n_compress(self, size: int):
+    def _read_compressed_into(self, b: memoryview) -> int:
+        buf = self._compressed_stream.read(len(b))
+        b[: len(buf)] = buf
+        return len(buf)
+
+    def _read_and_compress(self, size: int):
         assert size > 0
 
         data = self._stream.read(size)
@@ -65,10 +70,11 @@ class GZIPCompressedStream(io.RawIOBase):
         if data:
             self._compressor.write(data)
         else:
-            # this will write final data (will flush zlib with Z_FINISH)
+
+            # write final data (will flush zlib with Z_FINISH)
             self._compressor.close()
 
-        # rewind to the buffer start
+        # rewind to buffer start
         self._compressed_stream.seek(0)
 
     def __repr__(self) -> str:

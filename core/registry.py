@@ -9,8 +9,9 @@ import humanfriendly
 import requests
 import requests.auth
 
-from . import image_manifest_creator, gzip_stream
+from . import image_manifest_creator
 import utils.helpers
+import utils.gzip_stream
 
 
 class LayersLock:
@@ -117,7 +118,7 @@ class Registry:
                 image=image,
                 config_path=config_path,
             )
-            # self._change_config(config_path, manifest_layer_info)
+
             push_url = self._initialize_push(image)
             digest, size = self._push_config(config_path, push_url)
             config_info = {'digest': digest, 'size': size}
@@ -150,26 +151,6 @@ class Registry:
             'Image pushed',
             repo_tags=repo_tags,
             elapsed=humanfriendly.format_timespan(image_elapsed),
-        )
-
-    def _change_config(self, config_path, layers_info):
-        contents = utils.helpers.load_json_file(config_path)
-
-        # sanity
-        if len(contents['rootfs']['diff_ids']) != len(layers_info):
-            self._logger.log_and_raise(
-                'error',
-                'Mismatch in layer count for config',
-                orig_num=len(contents['rootfs']['diff_ids']),
-                layers_info_num=len(layers_info),
-                config_path=config_path,
-            )
-
-        for idx, layer_info in enumerate(layers_info):
-            contents['rootfs']['diff_ids'][idx] = layer_info['digest']
-        utils.helpers.dump_json_file(config_path, contents)
-        self._logger.info(
-            'Corrected image config digests', contents=contents, config_path=config_path
         )
 
     def _stream_print(self, what, end=None):
@@ -306,7 +287,7 @@ class Registry:
             sha256hash = hashlib.sha256()
 
             if gzip:
-                f_read = gzip_stream.GZIPCompressedStream(f, compression_level=9)
+                f_read = utils.gzip_stream.GZIPCompressedStream(f, compression_level=7)
                 headers['Content-Encoding'] = 'gzip'
             else:
                 f_read = f
