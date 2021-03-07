@@ -2,6 +2,7 @@ import tempfile
 import multiprocessing.pool
 import time
 import os.path
+import shutil
 import json
 
 import humanfriendly
@@ -10,14 +11,17 @@ from . import registry
 from . import extractor
 
 
-class Processor(object):
+class Processor:
     def __init__(
         self,
         logger,
+        tmp_dir,
+        tmp_dir_override,
         parallel,
         registry_url,
         archive_path,
         stream=False,
+        gzip_layers=False,
         login=None,
         password=None,
         ssl_verify=True,
@@ -26,6 +30,8 @@ class Processor(object):
     ):
         self._logger = logger
         self._parallel = parallel
+        self._tmp_dir = tmp_dir
+        self._tmp_dir_override = tmp_dir_override
 
         if parallel > 1 and stream:
             self._logger.info(
@@ -36,6 +42,7 @@ class Processor(object):
 
         self._registry = registry.Registry(
             logger=self._logger,
+            gzip_layers=gzip_layers,
             registry_url=registry_url,
             stream=stream,
             login=login,
@@ -55,8 +62,14 @@ class Processor(object):
         """
         start_time = time.time()
         results = []
-        with tempfile.TemporaryDirectory() as tmp_dir_name:
+        if self._tmp_dir_override:
+            tmp_dir_name = self._tmp_dir_override
+            os.mkdir(tmp_dir_name, 0o700)
+        else:
+            tmp_dir_name = tempfile.mkdtemp(dir=self._tmp_dir)
 
+        # since we're not always using TemporaryDirectory we're making and cleaning up ourselves
+        try:
             self._logger.info(
                 'Processing archive',
                 archive_path=self._extractor.archive_path,
@@ -83,9 +96,12 @@ class Processor(object):
                 pool.close()
                 pool.join()
 
-        # this will throw if any pool worker caught an exception
-        for res in results:
-            res.get()
+            # this will throw if any pool worker caught an exception
+            for res in results:
+                res.get()
+        finally:
+            shutil.rmtree(tmp_dir_name)
+            self._logger.verbose('Removed workdir', tmp_dir_name=tmp_dir_name)
 
         elapsed = time.time() - start_time
         self._logger.info(
@@ -95,10 +111,15 @@ class Processor(object):
         )
 
     @staticmethod
-    def _get_manifest(tmp_dir_name):
-        with open(os.path.join(tmp_dir_name, 'manifest.json'), 'r') as fh:
+    def _get_manifest(archive_dir):
+        with open(os.path.join(archive_dir, 'manifest.json'), 'r') as fh:
             manifest = json.loads(fh.read())
             return manifest
+
+    @staticmethod
+    def _write_manifest(archive_dir, contents):
+        with open(os.path.join(archive_dir, 'manifest.json'), 'w') as fh:
+            json.dump(contents, fh)
 
 
 #
