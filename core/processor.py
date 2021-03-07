@@ -2,19 +2,16 @@ import tempfile
 import multiprocessing.pool
 import time
 import os.path
-import pathlib
 import shutil
 import json
-import gzip
 
 import humanfriendly
 
 from . import registry
 from . import extractor
-import utils.helpers
 
 
-class Processor(object):
+class Processor:
     def __init__(
         self,
         logger,

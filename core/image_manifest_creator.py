@@ -1,7 +1,7 @@
 import json
 
 
-class ImageManifestCreator(object):
+class ImageManifestCreator:
     def __init__(self, config_path, layers_info, config_info):
         self._config_path = config_path
         self._layers_info = layers_info

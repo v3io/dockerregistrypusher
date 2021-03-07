@@ -6,7 +6,7 @@ import time
 import humanfriendly
 
 
-class Extractor(object):
+class Extractor:
     def __init__(self, logger, archive_path):
         self._logger = logger.get_child('tar')
         self._archive_path = os.path.abspath(archive_path)
