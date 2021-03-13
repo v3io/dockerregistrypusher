@@ -1,7 +1,10 @@
 import tempfile
+import subprocess
 import multiprocessing.pool
 import time
 import os.path
+import pathlib
+import shutil
 import json
 
 import humanfriendly
@@ -14,10 +17,13 @@ class Processor(object):
     def __init__(
         self,
         logger,
+        tmp_dir,
+        tmp_dir_override,
         parallel,
         registry_url,
         archive_path,
         stream=False,
+        gzip_layers=False,
         login=None,
         password=None,
         ssl_verify=True,
@@ -26,6 +32,9 @@ class Processor(object):
     ):
         self._logger = logger
         self._parallel = parallel
+        self._tmp_dir = tmp_dir
+        self._tmp_dir_override = tmp_dir_override
+        self._gzip_layers = gzip_layers
 
         if parallel > 1 and stream:
             self._logger.info(
@@ -55,8 +64,14 @@ class Processor(object):
         """
         start_time = time.time()
         results = []
-        with tempfile.TemporaryDirectory() as tmp_dir_name:
+        if self._tmp_dir_override:
+            tmp_dir_name = self._tmp_dir_override
+            os.mkdir(tmp_dir_name, 0o700)
+        else:
+            tmp_dir_name = tempfile.mkdtemp(dir=self._tmp_dir)
 
+        # since we're not always using TemporaryDirectory we're making and cleaning up ourselves
+        try:
             self._logger.info(
                 'Processing archive',
                 archive_path=self._extractor.archive_path,
@@ -66,6 +81,9 @@ class Processor(object):
 
             # extract the whole thing
             self._extractor.extract_all(tmp_dir_name)
+
+            # pre-process layers in place - for kaniko
+            self._pre_process_contents(tmp_dir_name)
 
             manifest = self._get_manifest(tmp_dir_name)
             self._logger.debug('Extracted archive manifest', manifest=manifest)
@@ -83,9 +101,12 @@ class Processor(object):
                 pool.close()
                 pool.join()
 
-        # this will throw if any pool worker caught an exception
-        for res in results:
-            res.get()
+            # this will throw if any pool worker caught an exception
+            for res in results:
+                res.get()
+        finally:
+            shutil.rmtree(tmp_dir_name)
+            self._logger.verbose('Removed workdir', tmp_dir_name=tmp_dir_name)
 
         elapsed = time.time() - start_time
         self._logger.info(
@@ -94,11 +115,98 @@ class Processor(object):
             elapsed=humanfriendly.format_timespan(elapsed),
         )
 
+    def _pre_process_contents(self, root_dir):
+        start_time = time.time()
+        if not self._gzip_layers:
+            return
+
+        self._logger.debug('Preprocessing extracted contents')
+
+        # for Kaniko compatibility - must be real tar.gzip and not just tar
+        # self._correct_symlinks(root_dir)
+        gzipped_layers = self._compress_layers(root_dir)
+        self._update_manifests(root_dir, gzipped_layers)
+
+        elapsed = time.time() - start_time
+        self._logger.info(
+            'Finished preprocessing archive contents',
+            elapsed=humanfriendly.format_timespan(elapsed),
+        )
+
+    def _compress_layers(self, root_dir):
+        """
+        we do this in 2 passes, because some layers are symlinked and we re-pointed them to tar.gz earlier, we must
+        skip them first, since they are broken symlinks. first gzip all non-linked layers, then do another pass and
+        gzip the symlinked ones.
+        """
+        self._logger.debug(
+            'Compressing all layer files (pre-processing)', processes=self._parallel
+        )
+        gzipped_paths = []
+        results = []
+        with multiprocessing.pool.ThreadPool(processes=self._parallel) as pool:
+            for element in pathlib.Path(root_dir).iterdir():
+                if not element.is_dir():
+                    continue
+
+                res = pool.apply_async(
+                    self._compress_layer,
+                    (element,),
+                )
+                results.append(res)
+
+            pool.close()
+            pool.join()
+
+        # this will throw if any pool worker caught an exception
+        for res in results:
+            gzipped_paths.append(res.get())
+
+        self._logger.debug('Finished compressing all layer files')
+        return gzipped_paths
+
+    def _compress_layer(self, layer_dir_path):
+        gzipped_layer_path = str(layer_dir_path.absolute()) + '.tar.gz'
+
+        # gzip and keep original (to control the output name)
+        tar_cmd = f'tar -czf {gzipped_layer_path} -C {layer_dir_path.parents[0].absolute()} {layer_dir_path.name}'
+        self._logger.info('Compressing layer dir', tar_cmd=tar_cmd)
+        subprocess.check_call(tar_cmd, shell=True)
+
+        self._logger.debug(
+            'Successfully gzipped layer',
+            gzipped_layer_path=gzipped_layer_path,
+            file_path=layer_dir_path,
+        )
+
+        # remove original
+        shutil.rmtree(layer_dir_path.absolute())
+
+        return gzipped_layer_path
+
+    def _update_manifests(self, root_dir, gzipped_layers):
+        self._logger.debug('Correcting image manifests')
+        manifest = self._get_manifest(root_dir)
+
+        for manifest_image_section in manifest:
+            for idx, layer in enumerate(manifest_image_section["Layers"]):
+                if layer.endswith('.tar'):
+                    manifest_image_section["Layers"][idx] = gzipped_layers[idx]
+
+        # write modified image config
+        self._write_manifest(root_dir, manifest)
+        self._logger.debug('Updated image manifests', manifest=manifest)
+
     @staticmethod
-    def _get_manifest(tmp_dir_name):
-        with open(os.path.join(tmp_dir_name, 'manifest.json'), 'r') as fh:
+    def _get_manifest(archive_dir):
+        with open(os.path.join(archive_dir, 'manifest.json'), 'r') as fh:
             manifest = json.loads(fh.read())
             return manifest
+
+    @staticmethod
+    def _write_manifest(archive_dir, contents):
+        with open(os.path.join(archive_dir, 'manifest.json'), 'w') as fh:
+            json.dump(contents, fh)
 
 
 #

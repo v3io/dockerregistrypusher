@@ -10,5 +10,6 @@ ENV/
 # pycharm proj
 .idea
 
-# stray tar.gz files used for manual testing
+# stray archive files used for manual testing
+*.tar
 *.tar.gz
