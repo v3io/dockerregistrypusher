@@ -95,7 +95,7 @@ class Registry:
                 tmp_dir_name=tmp_dir_name,
             )
 
-            # push individual image layers
+            # push image layer blobs
             layers = image_config["Layers"]
             manifest_layer_info = []
             for layer in layers:

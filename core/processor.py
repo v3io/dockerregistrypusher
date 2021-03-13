@@ -1,17 +1,16 @@
 import tempfile
+import subprocess
 import multiprocessing.pool
 import time
 import os.path
 import pathlib
 import shutil
 import json
-import gzip
 
 import humanfriendly
 
 from . import registry
 from . import extractor
-import utils.helpers
 
 
 class Processor(object):
@@ -124,10 +123,9 @@ class Processor(object):
         self._logger.debug('Preprocessing extracted contents')
 
         # for Kaniko compatibility - must be real tar.gzip and not just tar
-        gzip_ext = '.gz'
-        self._correct_symlinks(root_dir, gzip_ext)
-        self._compress_layers(root_dir, gzip_ext)
-        self._update_manifests(root_dir, gzip_ext)
+        # self._correct_symlinks(root_dir)
+        gzipped_layers = self._compress_layers(root_dir)
+        self._update_manifests(root_dir, gzipped_layers)
 
         elapsed = time.time() - start_time
         self._logger.info(
@@ -135,41 +133,7 @@ class Processor(object):
             elapsed=humanfriendly.format_timespan(elapsed),
         )
 
-    def _correct_symlinks(self, root_dir, gzip_ext):
-        self._logger.debug('Updating symlinks to compressed layers')
-
-        # move layer symlinks to gz files, even if they are not there
-        for root, dirs, files in os.walk(root_dir):
-            for filename in files:
-                path = os.path.join(root, filename)
-
-                # If it's not a symlink we're not interested.
-                if not os.path.islink(path):
-                    continue
-
-                target_path = str(os.readlink(path))
-
-                if target_path.endswith('layer.tar'):
-                    self._logger.debug(
-                        'Found link to tar layer, pointing to compressed',
-                        target_path=target_path,
-                        path=path,
-                    )
-
-                    # try and fix - point to tar.gz
-                    new_target_path = target_path + gzip_ext
-                    tmp_link_path = f'{path}_tmplink'
-                    os.symlink(new_target_path, tmp_link_path)
-                    os.unlink(path)
-                    os.rename(tmp_link_path, path)
-                    self._logger.debug(
-                        'Moved layer link to compressed target',
-                        new_target_path=new_target_path,
-                        path=path,
-                    )
-        self._logger.debug('Finished updating symlinks')
-
-    def _compress_layers(self, root_dir, gzip_ext):
+    def _compress_layers(self, root_dir):
         """
         we do this in 2 passes, because some layers are symlinked and we re-pointed them to tar.gz earlier, we must
         skip them first, since they are broken symlinks. first gzip all non-linked layers, then do another pass and
@@ -178,15 +142,16 @@ class Processor(object):
         self._logger.debug(
             'Compressing all layer files (pre-processing)', processes=self._parallel
         )
+        gzipped_paths = []
         results = []
-
-        self._logger.debug('Compressing non symlink layers')
         with multiprocessing.pool.ThreadPool(processes=self._parallel) as pool:
-            for element in pathlib.Path(root_dir).rglob('*.tar'):
-                file_path = str(element.absolute())
+            for element in pathlib.Path(root_dir).iterdir():
+                if not element.is_dir():
+                    continue
+
                 res = pool.apply_async(
                     self._compress_layer,
-                    (file_path, gzip_ext, False),
+                    (element,),
                 )
                 results.append(res)
 
@@ -195,112 +160,42 @@ class Processor(object):
 
         # this will throw if any pool worker caught an exception
         for res in results:
-            res.get()
-
-        results = []
-        self._logger.debug('Compressing symlink layers')
-        with multiprocessing.pool.ThreadPool(processes=self._parallel) as pool:
-            for element in pathlib.Path(root_dir).rglob('*.tar'):
-                file_path = str(element.absolute())
-                res = pool.apply_async(
-                    self._compress_layer,
-                    (file_path, gzip_ext, True),
-                )
-                results.append(res)
-
-            pool.close()
-            pool.join()
-
-        # this will throw if any pool worker caught an exception
-        for res in results:
-            res.get()
+            gzipped_paths.append(res.get())
 
         self._logger.debug('Finished compressing all layer files')
+        return gzipped_paths
 
-    def _compress_layer(self, file_path, gzip_ext, compress_symlinks):
-        try:
-            gzipped_file_path = file_path + gzip_ext
+    def _compress_layer(self, layer_dir_path):
+        gzipped_layer_path = str(layer_dir_path.absolute()) + '.tar.gz'
 
-            # safety - if .tar.gz is in place, skip
-            # compression and ignore the original
-            if os.path.exists(gzipped_file_path):
-                self._logger.debug(
-                    'Layer file is already gzipped - skipping',
-                    file_path=file_path,
-                    gzipped_path=gzipped_file_path,
-                )
-                return
+        # gzip and keep original (to control the output name)
+        tar_cmd = f'tar -czf {gzipped_layer_path} -C {layer_dir_path.parents[0].absolute()} {layer_dir_path.name}'
+        self._logger.info('Compressing layer dir', tar_cmd=tar_cmd)
+        subprocess.check_call(tar_cmd, shell=True)
 
-            if os.path.islink(file_path) != compress_symlinks:
-                if compress_symlinks:
-                    log_message = (
-                        'Layer file is not a symlink (symlinks only requested) - skipping',
-                    )
-                else:
-                    log_message = (
-                        'Layer file is a symlink (non-symlinks requested) - skipping',
-                    )
-                self._logger.debug(log_message, file_path=file_path)
-                return
+        self._logger.debug(
+            'Successfully gzipped layer',
+            gzipped_layer_path=gzipped_layer_path,
+            file_path=layer_dir_path,
+        )
 
-            # .tar ->.tar.gzip
-            self._logger.info('Compressing layer file', file_path=file_path)
+        # remove original
+        shutil.rmtree(layer_dir_path.absolute())
 
-            with open(file_path, 'rb') as f_in, gzip.open(
-                gzipped_file_path, 'wb'
-            ) as f_out:
-                f_out.writelines(f_in)
+        return gzipped_layer_path
 
-            os.remove(file_path)
-            self._logger.debug(
-                'Successfully gzipped layer',
-                gzipped_file_path=gzipped_file_path,
-                file_path=file_path,
-            )
-
-        except Exception as exc:
-
-            # print debugging info
-            layer_dir = pathlib.Path(file_path).parents[0]
-            files = layer_dir.glob('**/*')
-            self._logger.debug(
-                'Listed elements in layer dir',
-                files=[f for f in files],
-                layer_dir=layer_dir,
-                exc=exc,
-            )
-            raise
-
-    def _update_manifests(self, root_dir, gzip_ext):
+    def _update_manifests(self, root_dir, gzipped_layers):
         self._logger.debug('Correcting image manifests')
         manifest = self._get_manifest(root_dir)
 
         for manifest_image_section in manifest:
-            config_filename = manifest_image_section["Config"]
-            config_path = os.path.join(root_dir, config_filename)
-            image_config = utils.helpers.load_json_file(config_path)
-
-            # warning - spammy
-            self._logger.verbose('Parsed image config', image_config=image_config)
-
             for idx, layer in enumerate(manifest_image_section["Layers"]):
                 if layer.endswith('.tar'):
-                    gzipped_layer_file_path = layer + gzip_ext
-                    manifest_image_section["Layers"][idx] = gzipped_layer_file_path
-                    # image_config["rootfs"]['diff_ids'][idx] = utils.helpers.get_digest(
-                    #     os.path.join(root_dir, gzipped_layer_file_path)
-                    # )
-
-            self._logger.debug(
-                '',
-                config_path=config_path,
-                image_config=image_config,
-            )
-            # utils.helpers.dump_json_file(config_path, image_config)
+                    manifest_image_section["Layers"][idx] = gzipped_layers[idx]
 
         # write modified image config
         self._write_manifest(root_dir, manifest)
-        self._logger.debug('Corrected image manifests', manifest=manifest)
+        self._logger.debug('Updated image manifests', manifest=manifest)
 
     @staticmethod
     def _get_manifest(archive_dir):
